@@ -10,7 +10,10 @@ services:
       EMAIL_VERIFIER_API_KEY: ${EMAIL_VERIFIER_API_KEY:-}
       EMAIL_VERIFIER_DB: /data/jobs.sqlite3
       EMAIL_VERIFIER_RATE_LIMIT_PER_MINUTE: ${EMAIL_VERIFIER_RATE_LIMIT_PER_MINUTE:-120}
-      VERIFIER_SMTP_ENABLED: "false"
+      # Mailbox (SMTP) checks stay off until you set these in .env (and AWS has lifted its port-25 block).
+      VERIFIER_SMTP_ENABLED: ${VERIFIER_SMTP_ENABLED:-false}
+      VERIFIER_HELO_DOMAIN: ${VERIFIER_HELO_DOMAIN:-}
+      VERIFIER_MAIL_FROM: ${VERIFIER_MAIL_FROM:-}
     volumes:
       - verifier_data:/data
     ports:
