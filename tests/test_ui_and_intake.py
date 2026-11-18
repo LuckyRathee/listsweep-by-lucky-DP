@@ -65,7 +65,7 @@ async def test_page_shell_is_public_but_data_routes_need_the_key(tmp_path):
         assert page.status_code == 200 and 'List Sweep' in page.text and 'Digital Patron' in page.text
         assert (await client.get('/ui/app.js')).status_code == 200
         assert (await client.get('/ui/style.css')).status_code == 200
-        logo = await client.get('/ui/digital-patron-mark.png')
+        logo = await client.get('/ui/digital-patron-mark-black.png')
         assert logo.status_code == 200 and logo.content.startswith(b'\x89PNG')
         assert (await client.get('/ui/digital-patron-logo.png')).status_code == 200
         for path in ('/v1/config', '/v1/jobs', '/v1/jobs/x'):
