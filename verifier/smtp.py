@@ -5,7 +5,7 @@ import secrets
 import socket
 import time
 
-from .policy import ProbeVerdict, detect_catch_all, interpret_rcpt
+from .policy import ProbeVerdict, detect_catch_all, interpret_rcpt, refused_by_policy
 
 
 class AsyncSMTPProbe:
@@ -71,12 +71,24 @@ class AsyncSMTPProbe:
             if 400 <= mail_code <= 499:
                 raise asyncio.TimeoutError('Temporary reverse-path rejection')
             if not 200 <= mail_code <= 299:
+                if refused_by_policy(' '.join(mail_lines)):
+                    # The server is refusing our sender or IP; it says nothing about the mailbox.
+                    return [ProbeVerdict('unknown', 'smtp_blocked_by_policy', mail_code)
+                            for _ in addresses]
                 raise ConnectionError('Reverse path was rejected; recipient is unknown')
             verdicts = []
             for address in addresses:
-                lines = await self._command(reader, writer, f'RCPT TO:<{address}>')
+                try:
+                    lines = await self._command(reader, writer, f'RCPT TO:<{address}>')
+                except (ConnectionError, TimeoutError):
+                    if not verdicts:
+                        raise
+                    # The server hung up after answering the candidate; keep that answer.
+                    verdicts.extend(ProbeVerdict('unknown', 'smtp_connection_dropped')
+                                    for _ in addresses[len(verdicts):])
+                    break
                 code = int(lines[-1][:3]) if lines[-1][:3].isdigit() else 0
-                verdicts.append(interpret_rcpt(code))
+                verdicts.append(interpret_rcpt(code, ' '.join(lines)))
             return verdicts
         finally:
             try:
@@ -117,22 +129,36 @@ class AsyncSMTPProbe:
                 not ipaddress.ip_address(address).is_global for address in addresses
             ):
                 return ProbeVerdict('unknown', 'smtp_non_public_target')
-            lock = await self._acquire(host)
+            await self._acquire(host)
+            pair = None
             try:
-                async with asyncio.timeout(self.timeout * 4 + 2):
-                    # Connect to the validated numeric address, not a second DNS lookup.
-                    pair = await self._transact(addresses[0], [email, control])
-            except (OSError, ValueError, ConnectionError, asyncio.TimeoutError):
-                continue
+                # IPv4 first (many networks have no IPv6 route); try a few addresses of the host.
+                for address in sorted(addresses, key=lambda a: ':' in a)[:3]:
+                    try:
+                        async with asyncio.timeout(self.timeout * 4 + 2):
+                            # Connect to the validated numeric address, not a second DNS lookup.
+                            pair = await self._transact(address, [email, control])
+                        break
+                    except (OSError, ValueError, ConnectionError, asyncio.TimeoutError):
+                        continue
             finally:
                 self._locks[host].release()
             if pair:
-                if pair[0].reason in ('smtp_mailbox_rejected', 'smtp_temporary_failure'):
+                if pair[0].reason in ('smtp_mailbox_rejected', 'smtp_temporary_failure',
+                                       'smtp_blocked_by_policy', 'smtp_ambiguous_response'):
                     # The candidate already carries its own evidence (a definite rejection
                     # or a temporary failure); the control only matters when it is accepted.
                     verdict = pair[0]
                 else:
-                    verdict = detect_catch_all(pair[0], pair[1])
+                    candidate, control_verdict = pair[0], pair[1]
+                    if (candidate.smtp_code == 250 and control_verdict.smtp_code is not None
+                            and 500 <= control_verdict.smtp_code <= 599
+                            and control_verdict.reason != 'smtp_blocked_by_policy'):
+                        # For the random control address ANY permanent refusal means the server
+                        # does not accept everything, whatever wording it uses.
+                        control_verdict = ProbeVerdict('undeliverable', 'smtp_mailbox_rejected',
+                                                       control_verdict.smtp_code)
+                    verdict = detect_catch_all(candidate, control_verdict)
                 verdict.host = host
                 return verdict
         return ProbeVerdict('unknown', 'smtp_unresolved' if resolution_failure else 'smtp_unreachable')

@@ -24,12 +24,18 @@ class DNSResolver:
         return await self.resolver.resolve(domain, record)
 
     async def resolve_addresses(self, host: str) -> list[str]:
-        addresses = []
+        """IPv6 then IPv4 addresses for a mail host. A missing record type is normal (most hosts
+        have no AAAA); only if neither type yields an address AND a lookup truly failed do we raise."""
+        addresses, failure = [], None
         for kind in ('AAAA', 'A'):
             try:
                 addresses.extend(r.address for r in await self.resolve(host, kind))
-            except (dns.resolver.NXDOMAIN, dns.resolver.NODATA, dns.resolver.NoAnswer):
+            except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
                 continue
+            except dns.exception.DNSException as error:  # timeout, SERVFAIL, no nameservers
+                failure = error
+        if not addresses and failure is not None:
+            raise failure
         return addresses
 
 
