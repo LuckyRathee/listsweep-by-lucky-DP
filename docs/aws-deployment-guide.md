@@ -1,4 +1,6 @@
-# AWS EC2 supplement: conservative email-verification API
+# List Sweep by Digital Patron: AWS EC2 deployment guide
+
+This supplement covers deploying the conservative email-verification API.
 
 **Status: nothing is deployed to AWS.** This guide describes how to deploy the code in this repository to a single EC2 instance; no instance, security group, or AWS integration exists yet. The application code and its 87 tests pass locally (`pytest`), but the `Dockerfile` and `docker-compose.yml` have **not been built or run** (Docker was not available when they were written), so treat the first `docker compose up --build` as the first real test.
 

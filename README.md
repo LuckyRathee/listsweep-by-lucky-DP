@@ -1,4 +1,8 @@
-# Lead Email Verifier
+<p align="left"><img src="verifier/ui/digital-patron-mark.png" alt="Digital Patron" height="56"></p>
+
+# List Sweep
+
+**by [Digital Patron](https://digitalpatron.in/)**
 
 **Conservative bulk email verification that tells you what it doesn't know.**
 

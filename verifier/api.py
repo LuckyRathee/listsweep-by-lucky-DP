@@ -112,7 +112,7 @@ def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, 
         finally:
             await service.close()
 
-    application = FastAPI(title='Email Verifier', version='0.1.0', lifespan=lifespan)
+    application = FastAPI(title='List Sweep by Digital Patron', version='0.1.0', lifespan=lifespan)
     application.state.service = service
     application.state.store = service.store
     application.state.verifier = service.verifier

@@ -1,4 +1,4 @@
-/* Lead Email Verifier: neutral, minimal. Ink on off-white, one animated background layer. */
+/* List Sweep by Digital Patron: neutral, minimal. Ink on off-white, one animated background layer. */
 :root {
   --bg: #f0f0ed;
   --surface: #ffffff;
@@ -67,7 +67,9 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: 
   display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between;
 }
 .brand { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
-.mark { width: 22px; height: 22px; flex: none; }
+.mark { height: 28px; width: auto; flex: none; display: block; }
+.brand-name { font-weight: 600; }
+.brand-by { color: var(--muted); font-weight: 400; font-size: 13px; padding-left: 2px; }
 .keybox { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .keybox input { width: 230px; max-width: 100%; }
 .pill { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
