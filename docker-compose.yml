@@ -17,8 +17,8 @@ services:
     volumes:
       - verifier_data:/data
     ports:
-      # Loopback only; reach it through an SSH tunnel.
-      - "127.0.0.1:8080:8080"
+      # Loopback only by default. Set VERIFIER_BIND=0.0.0.0 in .env only when a firewall limits who can reach port 8080.
+      - "${VERIFIER_BIND:-127.0.0.1}:8080:8080"
 
 volumes:
   verifier_data:
