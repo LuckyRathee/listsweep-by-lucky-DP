@@ -2,14 +2,14 @@
 
 This supplement covers deploying the conservative email-verification API.
 
-**Status: deployed to one EC2 instance in `ap-south-1` (Mumbai), reachable only through an AWS Session Manager tunnel.** The app runs from this repository's `docker-compose.yml`; the Docker files built and ran unchanged on Ubuntu 24.04 (arm64). Mailbox (SMTP) checks are **off**, because AWS blocks outbound port 25 until you request that it be lifted. **Not yet verified:** opening the page through the tunnel from a Mac (needs the Session Manager plugin installed there), restoring a backup, restarting in the middle of a job, and anything that uses SMTP. No account numbers, instance ids or IP addresses are recorded in this repository.
+**Status: deployed to one EC2 instance in `ap-south-1` (Mumbai), reachable through an AWS Session Manager tunnel, and also directly on port 8080 from one allow-listed IP address.** The app runs from this repository's `docker-compose.yml`; the Docker files built and ran unchanged on Ubuntu 24.04 (arm64). Mailbox (SMTP) checks are **off**, because AWS blocks outbound port 25 until you request that it be lifted. **Not yet verified:** opening the page through the tunnel from a Mac (needs the Session Manager plugin installed there), restoring a backup, restarting in the middle of a job, and anything that uses SMTP. No account numbers, instance ids or IP addresses are recorded in this repository.
 
 **Storage is SQLite on a Docker named volume.** PostgreSQL is *not* implemented: `verifier/store.py` uses `sqlite3` only, and there is no `DATABASE_URL` setting. Moving to PostgreSQL is a separate work item (store rewrite, migrations, backup/restore), not a configuration change. Names, ports, and environment variables below match the code as of this revision.
 
 ## What is actually deployed, and how it differs from the plan below
 
 - **Server:** one `t4g.small` (Graviton/ARM, 2 vCPU, 2 GiB), Ubuntu 24.04 arm64, 20 GB encrypted gp3 disk, IMDSv2 required. Every resource is tagged `Project=listsweep`.
-- **Network (differs from the layout below):** the default VPC's public subnet with an Elastic IP and a security group with **zero inbound rules**, instead of a private subnet with a NAT gateway (which would add about $40 a month). Nothing on the internet can open a connection to the server. Outbound is narrowed to HTTPS, HTTP (apt mirrors), DNS and time sync; outbound TCP/25 was opened on the security group afterwards, but AWS still blocks it at the platform level until its request is approved (a test connection to Google's mail servers timed out).
+- **Network (differs from the layout below):** the default VPC's public subnet with an Elastic IP and a security group whose only inbound rule is TCP/8080 from one owner IP address (it was zero rules at first; the tunnel still works without it), instead of a private subnet with a NAT gateway (which would add about $40 a month). Nothing on the internet can open a connection to the server. Outbound is narrowed to HTTPS, HTTP (apt mirrors), DNS and time sync; outbound TCP/25 was opened on the security group afterwards, but AWS still blocks it at the platform level until its request is approved (a test connection to Google's mail servers timed out).
 - **Access:** AWS Session Manager only. There is no SSH key pair, and the SSH service is switched off. The instance role has only `AmazonSSMManagedInstanceCore`.
 - **Secrets:** the first admin's settings were stored as a temporary encrypted SSM parameter, read once by the server into a root-only `.env` (mode 600), and then the parameter and the extra permission that allowed the read were deleted.
 - **Code:** cloned from the public repository into `/opt/email-verifier`. Updates are manual; there is no auto-update.
@@ -65,6 +65,17 @@ aws iam delete-role --role-name listsweep-ec2-role
 # the backup service role was created for this project; delete it only if nothing else uses it:
 aws iam list-attached-role-policies --role-name AWSDataLifecycleManagerDefaultRole
 ```
+
+## Reaching the app by IP address (optional)
+
+The app is published on loopback only unless `VERIFIER_BIND=0.0.0.0` is set in the server's `.env`. This deployment sets it and allows inbound TCP/8080 from a single `/32` address, so `http://<elastic-ip>:8080/` works from that address only. The traffic is plain HTTP. If the owner's address changes, update the rule:
+
+```sh
+aws ec2 revoke-security-group-ingress --region ap-south-1 --group-id <sg-id> --protocol tcp --port 8080 --cidr <old-ip>/32
+aws ec2 authorize-security-group-ingress --region ap-south-1 --group-id <sg-id> --protocol tcp --port 8080 --cidr <new-ip>/32
+```
+
+To go back to tunnel-only, revoke the rule and remove `VERIFIER_BIND` from `.env`, then run `sudo docker compose up -d`.
 
 ## Steps only you can do before mailbox checks will work
 
@@ -169,7 +180,7 @@ This verifier does **not** require SES and should not send mail. If a separately
 
 **Release gate** (status after the first deployment):
 
-- [x] No inbound path from the internet: the security group has zero inbound rules, the SSH service is disabled (and stays off after a reboot), and `ss -ltnp` on the server shows only `127.0.0.1:8080` plus local DNS. Outbound TCP/25 is allowed by the security group (needed for mailbox checks) but blocked by AWS until approved; there is still no way in from the internet.
+- [x] No inbound path from the open internet: the security group's only inbound rule is TCP/8080 from one owner IP address (plain HTTP, so the sign-in password is not encrypted on that path; prefer the tunnel, or add HTTPS, before widening it), the SSH service is disabled (and stays off after a reboot), and `ss -ltnp` on the server shows only `127.0.0.1:8080` plus local DNS. Outbound TCP/25 is allowed by the security group (needed for mailbox checks) but blocked by AWS until approved; there is still no way in from the internet.
 - [x] `docker compose up --build` succeeded on arm64 and `docker compose ps` reports healthy; the container runs as a non-root user and owns its data volume.
 - [x] On the server: `/healthz` is ok, the sign-in page is served, requests without sign-in get 401, a wrong password gets 401, and the admin account signs in and out.
 - [x] Domain checks work against the real resolver: a real domain returns `unknown / mailbox_check_disabled` with its mail servers, and a non-existent domain returns `undeliverable / domain_not_found`.
