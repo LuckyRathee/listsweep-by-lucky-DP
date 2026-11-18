@@ -1,4 +1,4 @@
-<p align="left"><img src="verifier/ui/digital-patron-mark.png" alt="Digital Patron" height="56"></p>
+<p align="left"><img src="verifier/ui/digital-patron-logo.png" alt="Digital Patron" height="56"></p>
 
 # List Sweep
 

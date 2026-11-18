@@ -67,7 +67,7 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: 
   display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between;
 }
 .brand { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
-.mark { height: 28px; width: auto; flex: none; display: block; }
+.mark { height: 30px; width: auto; flex: none; display: block; }
 .brand-name { font-weight: 600; }
 .brand-by { color: var(--muted); font-weight: 400; font-size: 13px; padding-left: 2px; }
 .keybox { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
