@@ -155,3 +155,30 @@ async def test_single_check_reports_what_actually_happened_at_the_mailbox_step(t
         assert (bad['smtp_outcome'], bad['dns_checked']) == ('skipped', False)
         off = await one('a@ok.test', allow_smtp=False)
         assert (off['smtp_outcome'], off['smtp_checked']) == ('not_run', False)
+
+
+async def test_a_recheck_can_go_deeper_than_the_original_run(tmp_path):
+    async with client_for(tmp_path) as client:
+        job_id = await submit(client, ['a@ok.test'], check_dns='false', allow_smtp='false')
+        first = await wait_for(client, job_id, 'completed')
+        assert first['options']['allow_smtp'] is False and first['counts'] == {'unknown': 1}
+        deeper = await client.post(f'/v1/jobs/{job_id}/recheck', headers=H,
+                                   json={'scope': 'unknown', 'check_dns': True, 'allow_smtp': True})
+        assert deeper.status_code == 202
+        options = deeper.json()['options']
+        assert options['allow_smtp'] is True and options['check_dns'] is True
+        done = await wait_for(client, deeper.json()['job_id'], 'completed')
+        assert done['counts'] == {'deliverable_candidate': 1}
+        # without overrides the original depth is kept
+        again = await client.post(f'/v1/jobs/{job_id}/recheck', headers=H, json={'scope': 'all'})
+        assert again.json()['options']['allow_smtp'] is False
+
+
+async def test_a_deeper_recheck_is_refused_when_the_server_has_smtp_off(tmp_path):
+    app = create_app(store_path=str(tmp_path / 's.sqlite3'), api_key=KEY, smtp_enabled=False,
+                     verifier=Verifier(DNS(), Probe()))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+        job_id = await submit(client, ['a@ok.test'], allow_smtp='false')
+        await wait_for(client, job_id, 'completed')
+        refused = await client.post(f'/v1/jobs/{job_id}/recheck', headers=H, json={'allow_smtp': True})
+        assert refused.status_code == 403

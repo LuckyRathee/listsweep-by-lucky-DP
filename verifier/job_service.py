@@ -253,7 +253,7 @@ class JobService:
             self.store.set_job_status(job_id, 'cancelled')
         return job_id
 
-    def recheck(self, job_id, scope='unknown'):
+    def recheck(self, job_id, scope='unknown', check_dns=None, allow_smtp=None):
         """Start a new job from a finished job's addresses: the unresolved ones, or all."""
         if scope not in ('unknown', 'all'):
             raise ValueError("scope must be 'unknown' or 'all'")
@@ -269,6 +269,13 @@ class JobService:
         rows = [InputRow(index, r['email'], r['original_email'], r['metadata'])
                 for index, r in enumerate(picked, start=1)]
         options = dict(job['options'])
+        # A re-check may go deeper than the original run (e.g. add the mailbox check).
+        if allow_smtp is not None:
+            self.require_smtp_if_requested(allow_smtp)
+            options['allow_smtp'] = allow_smtp
+        if check_dns is not None:
+            self._check_dns_flag(check_dns)
+            options['check_dns'] = check_dns
         self.require_smtp_if_requested(bool(options.get('allow_smtp')))
         base = options.get('filename') or 'job'
         options.update(engine=RESULT_VERSION, rechecked_from=job_id,

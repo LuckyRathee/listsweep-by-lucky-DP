@@ -429,14 +429,16 @@ function watchJob(jobId, delay = 1000, failures = 0) {
 
 async function cancelCurrent(jobId = state.jobId) {
   if (!jobId) return;
-  $('cancel-job').disabled = true;
+  const tracked = jobId === state.jobId;
+  if (tracked) $('cancel-job').disabled = true;
   try {
     await postJson(`/v1/jobs/${encodeURIComponent(jobId)}/cancel`);
-    if (jobId === state.jobId) watchJob(jobId, 200);
-    else loadJobs();
+    if (tracked) watchJob(jobId, 200);
+    loadJobs();
   } catch (error) {
-    $('cancel-job').disabled = false;
+    if (tracked) $('cancel-job').disabled = false;
     notice(error.message);
+    loadJobs();
   }
 }
 
@@ -444,13 +446,27 @@ async function recheck(scope) {
   if (!state.jobId) return;
   notice('');
   try {
-    beginWatching(await postJson(`/v1/jobs/${encodeURIComponent(state.jobId)}/recheck`, { scope }));
+    // Uses the "How thorough" setting above, so a shallow job can be re-checked more deeply.
+    beginWatching(await postJson(`/v1/jobs/${encodeURIComponent(state.jobId)}/recheck`,
+      { scope, ...depthOptions($('bulk-depth')) }));
   } catch (error) {
     notice(error.message);
   }
 }
 
 /* ---------- results ---------- */
+// Rebuilding the table/chips would drop keyboard focus; remember what had it and restore it.
+function captureFocus() {
+  const active = document.activeElement;
+  let selector = null;
+  if (active && active.dataset) {
+    if (active.dataset.pos) selector = `#rows tr.row[data-pos="${CSS.escape(active.dataset.pos)}"]`;
+    else if (active.dataset.key && active.closest('#head-row')) selector = `#head-row button[data-key="${CSS.escape(active.dataset.key)}"]`;
+    else if (active.dataset.value && active.closest('#chips')) selector = `#chips button[data-value="${CSS.escape(active.dataset.value)}"]`;
+  }
+  return () => { if (selector) { const node = document.querySelector(selector); if (node) node.focus({ preventScroll: true }); } };
+}
+
 const tile = (value, label) => el('div', { class: 'tile' }, [el('b', { text: String(value) }), el('span', { text: label })]);
 const shortReason = (r) => SHORT[r.reason] || r.reason;
 
@@ -528,8 +544,8 @@ function renderChips() {
   const options = [['all', 'All', state.rows.length], ['deliverable_candidate', 'Candidates', count('deliverable_candidate')],
     ['unknown', 'Unknown', count('unknown')], ['undeliverable', 'Undeliverable', count('undeliverable')]];
   $('chips').replaceChildren(...options.map(([value, label, n]) => {
-    const chip = el('button', { type: 'button', class: 'chip', 'aria-pressed': String(state.filter === value), text: `${label} ${n}` });
-    chip.addEventListener('click', () => { state.filter = value; state.page = 0; renderChips(); renderTable(); });
+    const chip = el('button', { type: 'button', class: 'chip', 'data-value': value, 'aria-pressed': String(state.filter === value), text: `${label} ${n}` });
+    chip.addEventListener('click', () => { state.filter = value; state.page = 0; const restore = captureFocus(); renderChips(); renderTable(); restore(); });
     return chip;
   }));
 }
@@ -561,10 +577,12 @@ function renderHead() {
   $('head-row').replaceChildren(...columns().map((col) => {
     const active = state.sort.key === col.key;
     const th = el('th', { scope: 'col', 'aria-sort': active ? (state.sort.dir === 'asc' ? 'ascending' : 'descending') : 'none' });
-    const button = el('button', { type: 'button', text: col.label });
+    const button = el('button', { type: 'button', 'data-key': col.key, text: col.label });
     button.addEventListener('click', () => {
       state.sort = { key: col.key, dir: active && state.sort.dir === 'asc' ? 'desc' : 'asc' };
+      const restore = captureFocus();
       renderTable();
+      restore();
     });
     th.append(button);
     return th;
@@ -598,8 +616,8 @@ function renderTable() {
   const out = [];
   for (const r of rows.slice(state.page * PAGE_SIZE, (state.page + 1) * PAGE_SIZE)) {
     const open = state.expanded.has(r.position);
-    const tr = el('tr', { class: 'row', tabindex: '0', 'aria-expanded': String(open) });
-    const toggle = () => { open ? state.expanded.delete(r.position) : state.expanded.add(r.position); renderTable(); };
+    const tr = el('tr', { class: 'row', tabindex: '0', 'data-pos': String(r.position), 'aria-expanded': String(open) });
+    const toggle = () => { open ? state.expanded.delete(r.position) : state.expanded.add(r.position); const restore = captureFocus(); renderTable(); restore(); };
     tr.addEventListener('click', toggle);
     tr.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(); } });
     tr.append(

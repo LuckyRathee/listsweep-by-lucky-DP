@@ -44,6 +44,8 @@ class EmailRequest(BaseModel):
 
 class RecheckRequest(BaseModel):
     scope: str = 'unknown'
+    check_dns: bool | None = None     # None: keep the original job's setting
+    allow_smtp: bool | None = None
 
 
 class SheetRequest(BaseModel):
@@ -266,7 +268,10 @@ def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, 
     async def recheck_job(job_id: str, body: RecheckRequest | None = None):
         job_or_404(job_id)
         try:
-            new_id = service.recheck(job_id, (body.scope if body else 'unknown'))
+            new_id = service.recheck(
+                job_id, body.scope if body else 'unknown',
+                check_dns=body.check_dns if body else None,
+                allow_smtp=body.allow_smtp if body else None)
         except PermissionError as error:
             raise HTTPException(403, str(error)) from error
         except ValueError as error:
