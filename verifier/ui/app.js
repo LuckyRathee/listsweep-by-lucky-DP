@@ -91,9 +91,10 @@ const ROUTES = [
 ];
 
 const state = {
-  config: null, needKey: false, source: 'file', file: null,
+  config: null, source: 'file', file: null,
   job: null, jobId: null, rows: [], leads: [], filter: 'all', query: '', group: null,
   sort: { key: 'status', dir: 'asc' }, page: 0, expanded: new Set(), pollTimer: null,
+  auth: { mode: 'open', user: null, csrf: '', role: null },
 };
 
 /* ---------- helpers ---------- */
@@ -113,8 +114,6 @@ function el(tag, props = {}, children = []) {
   for (const child of [].concat(children)) node.append(child);
   return node;
 }
-const getKey = () => { try { return sessionStorage.getItem('ev_key') || ''; } catch { return ''; } };
-const setKey = (value) => { try { value ? sessionStorage.setItem('ev_key', value) : sessionStorage.removeItem('ev_key'); } catch { /* no storage */ } };
 
 function notice(message, kind = 'error') {
   const box = $('notice');
@@ -129,8 +128,7 @@ class ApiError extends Error {
 
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
-  const key = getKey();
-  if (key) headers['X-API-Key'] = key;
+  if (state.auth.csrf && !['GET', 'HEAD', undefined].includes(options.method)) headers['X-CSRF-Token'] = state.auth.csrf;
   let response;
   try {
     response = await fetch(path, { ...options, headers });
@@ -140,7 +138,20 @@ async function api(path, options = {}) {
   if (!response.ok) {
     let detail = response.statusText;
     try { const body = await response.json(); detail = typeof body.detail === 'string' ? body.detail : detail; } catch { /* not json */ }
-    if (response.status === 401) detail = 'The API key is missing or wrong';
+    if (response.status === 401 && detail === 'login_required') {
+      detail = 'Your session has ended. Sign in again.';
+      showLogin(detail);
+    } else if (response.status === 401) {
+      detail = 'Sign-in is not set up on this server.';
+      showLocked();
+    }
+    if (response.status === 403 && detail === 'password_change_required') {
+      detail = 'Choose a new password to continue.';
+      if (state.auth.user) state.auth.user.must_change = true;
+      go('#/account');
+    }
+    if (response.status === 403 && detail === 'admin_required') detail = 'Only an admin can do that.';
+    if (response.status === 403 && detail === 'csrf_failed') detail = 'Your session needs refreshing. Reload the page.';
     if (response.status === 429) detail = 'Too many requests; slowing down';
     throw new ApiError(response.status, detail, Number(response.headers.get('Retry-After')) || 0);
   }
@@ -160,33 +171,28 @@ function setConnected(kind, text) {
   refreshSingle();
 }
 
-function updateKeyUI() {
-  $('key-form').hidden = !state.needKey;
-  $('forget-key').hidden = !getKey();
-}
 
 async function loadConfig() {
   setConnected('pending', 'Connecting…');
   try {
     state.config = await getJson('/v1/config');
-    state.needKey = state.config.auth_required;
-    setConnected('ok', state.config.auth_required ? 'Connected' : 'Connected, no key needed');
+    setConnected('ok', state.auth.mode === 'open' ? 'Connected, no sign-in needed' : 'Connected');
     $('opt-conc').max = state.config.concurrency_range[1];
     refreshDepths();
-    updateKeyUI();
     notice('');
     return true;
   } catch (error) {
     state.config = null;
+    if (state.auth.mode === 'login') {
+      if (error.status !== 401) { setConnected('bad', 'Server unreachable'); notice(error.message); }
+      return false;
+    }
     if (error.status === 401) {
-      state.needKey = true;
-      setConnected('bad', 'Key needed');
-      notice(getKey() ? 'That API key was not accepted.' : 'Enter your API key above and press Connect.', 'info');
+      showLocked();
     } else {
       setConnected('bad', 'Server unreachable');
       notice(error.message);
     }
-    updateKeyUI();
     return false;
   }
 }
@@ -313,17 +319,20 @@ async function verifyOne(event) {
 }
 
 /* ---------- routing and tabs ---------- */
-const TABS = ['verify', 'jobs', 'api'];
+const TABS = ['verify', 'jobs', 'api', 'admin', 'account'];
+const NAV_TABS = () => [...document.querySelectorAll('.tabs [role=tab]:not([hidden])')];
 
 function showTab(name) {
   for (const tab of TABS) {
     const selected = tab === name;
-    $(`tab-${tab}`).setAttribute('aria-selected', String(selected));
-    $(`tab-${tab}`).tabIndex = selected ? 0 : -1;
+    const button = document.querySelector(`.tabs [role=tab]#tab-${tab}`);
+    if (button) { button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1; }
     $(`panel-${tab}`).hidden = !selected;
   }
   if (name === 'jobs') loadJobs();
   if (name === 'api') loadApiPanel();
+  if (name === 'admin') loadAdminPanel();
+  if (name === 'account') renderAccount();
 }
 
 function route() {
@@ -334,8 +343,12 @@ function route() {
     if (job[1] !== state.jobId || $('results').hidden) openJob(job[1]);
     return;
   }
-  const tab = hash.match(/^#\/(verify|jobs|api)$/);
-  showTab(tab ? tab[1] : 'verify');
+  const tab = hash.match(/^#\/(verify|jobs|api|admin|account)$/);
+  let name = tab ? tab[1] : 'verify';
+  if (state.auth.user && state.auth.user.must_change) name = 'account';          // must choose a password first
+  else if (name === 'admin' && state.auth.role !== 'admin') name = 'verify';
+  else if (name === 'account' && !state.auth.user) name = 'verify';
+  showTab(name);
 }
 const go = (hash) => { if (location.hash === hash) route(); else location.hash = hash; };
 const quietHash = (hash) => history.replaceState(null, '', hash);
@@ -804,7 +817,6 @@ async function loadKeys() {
   try {
     const { keys, server_key: serverKey, max_keys: maxKeys } = await getJson('/v1/keys');
     state.keys = keys;
-    const mine = getKey().slice(0, 8);
     $('key-rows').replaceChildren(...keys.map((key) => {
       const del = el('button', { type: 'button', class: 'btn small', text: 'Delete' });
       let armed = null;
@@ -815,10 +827,9 @@ async function loadKeys() {
           return;
         }
         clearTimeout(armed);
-        await deleteKey(key, mine && key.prefix === mine);
+        await deleteKey(key);
       });
       const name = el('td', { text: key.name });
-      if (mine && key.prefix === mine) name.append(el('span', { class: 'tag', text: 'this browser' }));
       return el('tr', {}, [name, el('td', { class: 'keyid', text: `${key.prefix}…` }), el('td', { text: when(key.created_at) }),
         el('td', { text: when(key.last_used_at) }), el('td', {}, del)]);
     }));
@@ -839,18 +850,18 @@ async function createKey(event) {
   const name = $('key-name').value.trim();
   if (!name) { notice('Give the key a name, for example the agent that will use it.', 'info'); $('key-name').focus(); return; }
   notice('');
-  const wasOpen = !state.needKey;
+  if (state.auth.mode === 'open') {
+    notice('Add the first admin account in People above before creating API keys. Creating a key switches protection on.', 'info');
+    return;
+  }
   try {
     const created = await postJson('/v1/keys', { name });
     $('key-new').value = created.key;
     $('key-new').dataset.name = created.name;
     $('key-reveal').hidden = false;
     $('key-reveal').scrollIntoView({ block: 'nearest' });
-    $('key-note').textContent = wasOpen
-      ? 'Authentication is now on, because a key exists. This browser is signed in with this key. Anything that used ListSweep without a key will now need one.'
-      : 'Store it somewhere safe. ListSweep keeps only a fingerprint of it, so it cannot be shown again.';
+    $('key-note').textContent = 'Store it somewhere safe. ListSweep keeps only a fingerprint of it, so it cannot be shown again.';
     $('key-name').value = '';
-    if (wasOpen) { setKey(created.key); await loadConfig(); }
     $('key-new').focus();
     $('key-new').select();
     await loadKeys();
@@ -860,11 +871,10 @@ async function createKey(event) {
   }
 }
 
-async function deleteKey(key, wasThisBrowser) {
+async function deleteKey(key) {
   try {
     await api(`/v1/keys/${encodeURIComponent(key.id)}`, { method: 'DELETE' });
     hideReveal();
-    if (wasThisBrowser) { setKey(''); await loadConfig(); }
     notice(`Deleted "${key.name}". It stopped working immediately.`, 'info');
     await loadKeys();
   } catch (error) {
@@ -920,7 +930,11 @@ async function loadMcpConfig() {
     $('mcp-blocks').replaceChildren(codeBlock('MCP settings (JSON)', json), codeBlock('Or add it to Claude Code', command));
     $('mcp-tools').replaceChildren(...cfg.tools.map((tool) => el('tr', {}, [el('td', {}, el('code', { text: tool.name })), el('td', { text: tool.description })])));
   } catch (error) {
-    if (error.status !== 401) notice(error.message);
+    if (error.status === 403) {
+      $('how-mcp').replaceChildren(el('li', { text: 'The MCP settings include this server\'s file paths, so only an admin can see them. Ask an admin.' }));
+      $('mcp-blocks').replaceChildren();
+      $('mcp-tools').replaceChildren();
+    } else if (error.status !== 401) notice(error.message);
   }
 }
 
@@ -942,22 +956,394 @@ function buildApiTab() {
 }
 
 function loadApiPanel() {
-  loadKeys();
+  const admin = state.auth.role === 'admin';
+  $('keys-pointer').hidden = false;
+  $('keys-pointer-text').textContent = admin
+    ? 'Create and delete API keys on the Admin page.'
+    : 'Ask an admin for an API key. They are created on the Admin page.';
   loadMcpConfig();
+}
+
+/* ---------- sign-in, account, admin ---------- */
+function showLogin(message = '') {
+  stopWatching();
+  clearTimeout(state.pollTimer);
+  Object.assign(state.auth, { user: null, csrf: '', role: null });
+  document.body.classList.add('locked');
+  $('who').hidden = true;
+  $('tab-admin').hidden = true;
+  $('results').hidden = true;
+  $('single-result').hidden = true;
+  $('progress-card').hidden = true;
+  $('login-password').value = '';
+  const error = $('login-error');
+  error.hidden = !message;
+  error.textContent = message;
+  $('locked').hidden = true;
+  $('login').hidden = false;
+  setConnected('pending', 'Signed out');
+  (message && $('login-email').value ? $('login-password') : $('login-email')).focus();
+}
+
+function showLocked() {
+  stopWatching();
+  clearTimeout(state.pollTimer);
+  Object.assign(state.auth, { user: null, csrf: '', role: null });
+  document.body.classList.add('locked');
+  $('login').hidden = true;
+  $('locked').hidden = false;
+  $('who').hidden = true;
+  $('tab-admin').hidden = true;
+  setConnected('bad', 'Sign-in not set up');
+}
+
+function unlockApp() {
+  $('locked').hidden = true;
+  $('login').hidden = true;
+  document.body.classList.remove('locked');
+}
+
+function updateWho() {
+  const user = state.auth.user;
+  $('who').hidden = !user;
+  if (user) {
+    $('who-email').textContent = user.email;
+    $('who-role').textContent = user.role;
+  }
+  $('tab-admin').hidden = state.auth.role !== 'admin';
+}
+
+// Who am I? Works for a signed-in person, an API key, or an open (no sign-in) server.
+async function refreshIdentity() {
+  try {
+    const me = await getJson('/v1/auth/me');
+    state.auth.role = me.role;
+    state.auth.user = me.method === 'user' ? { email: me.email, role: me.role, must_change: me.must_change } : null;
+    if (me.csrf) state.auth.csrf = me.csrf;
+  } catch {
+    state.auth.role = null;
+    state.auth.user = null;
+  }
+  updateWho();
+  return Boolean(state.auth.role);
+}
+
+async function startup() {
+  setConnected('pending', 'Connecting…');
+  let status;
+  try {
+    status = await (await fetch('/v1/auth/status')).json();
+  } catch {
+    setConnected('bad', 'Server unreachable');
+    notice('Could not reach the server.');
+    return;
+  }
+  state.auth.mode = status.login_required ? 'login' : (status.key_required ? 'keys' : 'open');
+  if (state.auth.mode === 'keys') { showLocked(); return; }
+  if (state.auth.mode === 'login') {
+    if (!(await refreshIdentity()) || !state.auth.user) { showLogin(); return; }
+    unlockApp();
+  } else {
+    unlockApp();
+  }
+  await loadConfig();
+  if (state.auth.mode !== 'login') await refreshIdentity();
+  updateWho();
+  route();
+}
+
+async function signIn(event) {
+  event.preventDefault();
+  const email = $('login-email').value.trim();
+  const password = $('login-password').value;
+  const error = $('login-error');
+  error.hidden = true;
+  if (!email || !password) {
+    error.textContent = 'Enter your email and password.';
+    error.hidden = false;
+    return;
+  }
+  $('login-go').disabled = true;
+  $('login-go').textContent = 'Signing in…';
+  try {
+    const response = await fetch('/v1/auth/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new ApiError(response.status, typeof body.detail === 'string' ? body.detail : 'Could not sign in');
+    state.auth.csrf = body.csrf;
+    state.auth.mode = 'login';
+    $('login-password').value = '';
+    await startup();
+    if (body.must_change) go('#/account');
+  } catch (failure) {
+    error.textContent = failure.message;
+    error.hidden = false;
+    $('login-password').select();
+  } finally {
+    $('login-go').disabled = false;
+    $('login-go').textContent = 'Sign in';
+  }
+}
+
+async function signOut() {
+  try { await api('/v1/auth/logout', { method: 'POST' }); } catch { /* the session may already be gone */ }
+  history.replaceState(null, '', '#/verify');
+  $('login-email').value = '';
+  showLogin();
+}
+
+function renderAccount() {
+  const user = state.auth.user;
+  $('account-lede').textContent = user && user.must_change
+    ? 'Choose a new password to continue. The one you were given is temporary.'
+    : `Signed in as ${user ? user.email : ''}.`;
+  $('pw-error').hidden = true;
+}
+
+async function changePassword(event) {
+  event.preventDefault();
+  const error = $('pw-error');
+  error.hidden = true;
+  const current = $('pw-current').value, next = $('pw-new').value;
+  const fail = (message) => { error.textContent = message; error.hidden = false; };
+  if (!current || !next) return fail('Fill in every field.');
+  if (next !== $('pw-confirm').value) return fail('The new passwords do not match.');
+  try {
+    await api('/v1/auth/password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: current, new_password: next }),
+    });
+    for (const id of ['pw-current', 'pw-new', 'pw-confirm']) $(id).value = '';
+    const wasForced = state.auth.user && state.auth.user.must_change;
+    if (state.auth.user) state.auth.user.must_change = false;
+    notice('Password changed. Your other sessions were signed out.', 'info');
+    if (wasForced) go('#/verify');
+  } catch (failure) {
+    fail(failure.message);
+  }
+  return undefined;
+}
+
+/* --- admin: people --- */
+function hideUserReveal() {
+  $('user-reveal').hidden = true;
+  $('user-secret').value = '';
+}
+
+function showUserSecret(title, secret, note) {
+  $('user-reveal-title').textContent = title;
+  $('user-secret').value = secret;
+  $('user-note').textContent = note;
+  $('user-reveal').hidden = false;
+  $('user-reveal').scrollIntoView({ block: 'nearest' });
+  $('user-secret').focus();
+  $('user-secret').select();
+}
+
+function confirmButton(label, confirmLabel, action) {
+  const button = el('button', { type: 'button', class: 'btn small', text: label });
+  let armed = null;
+  button.addEventListener('click', async () => {
+    if (!armed) {
+      button.textContent = confirmLabel;
+      armed = setTimeout(() => { armed = null; button.textContent = label; }, 4000);
+      return;
+    }
+    clearTimeout(armed);
+    armed = null;
+    button.textContent = label;
+    await action();
+  });
+  return button;
+}
+
+async function loadUsers() {
+  try {
+    const { users, first_account: first } = await getJson('/v1/users');
+    state.users = users;
+    $('people-hint').textContent = first
+      ? 'Nobody has an account yet, so anyone who can open this page can use ListSweep. Add the first admin account to switch sign-in on.'
+      : 'People who can sign in. Admins also manage people and API keys. Everyone shares the same jobs and results.';
+    $('user-role').value = first ? 'admin' : $('user-role').value;
+    $('user-role').disabled = first;
+    $('user-password').placeholder = first ? 'Password (required)' : 'Password (optional)';
+    const meId = state.auth.user ? users.find((u) => u.email === state.auth.user.email) : null;
+    $('user-rows').replaceChildren(...users.map((user) => {
+      const isMe = Boolean(meId && meId.id === user.id);
+      const role = el('select', { 'aria-label': `Role for ${user.email}` }, [el('option', { value: 'user', text: 'User' }), el('option', { value: 'admin', text: 'Admin' })]);
+      role.value = user.role;
+      role.disabled = isMe;
+      role.addEventListener('change', () => updateUser(user, { role: role.value }, () => { role.value = user.role; }));
+      const email = el('td', { text: user.email });
+      if (isMe) email.append(el('span', { class: 'tag you', text: 'you' }));
+      if (user.must_change) email.append(el('span', { class: 'tag you', text: 'must set password' }));
+      const actions = el('div', { class: 'actions' });
+      if (!isMe) {
+        actions.append(
+          el('button', { type: 'button', class: 'btn small', text: user.status === 'active' ? 'Disable' : 'Enable' }),
+          confirmButton('Reset password', 'Confirm reset', () => resetPassword(user)),
+          confirmButton('Delete', 'Confirm delete', () => removeUser(user)),
+        );
+        actions.firstChild.addEventListener('click', () => updateUser(user, { status: user.status === 'active' ? 'disabled' : 'active' }));
+      }
+      return el('tr', {}, [email, el('td', {}, role),
+        el('td', {}, el('span', { class: `badge ${user.status === 'active' ? 'completed' : 'cancelled'}`, text: user.status })),
+        el('td', { text: when(user.last_login_at) }), el('td', {}, actions)]);
+    }));
+  } catch (error) {
+    if (error.status !== 401) notice(error.message);
+  }
+}
+
+async function createUser(event) {
+  event.preventDefault();
+  const email = $('user-email').value.trim();
+  const password = $('user-password').value;
+  if (!email) { notice('Enter the email address of the person to add.', 'info'); $('user-email').focus(); return; }
+  notice('');
+  try {
+    const wasFirst = state.auth.mode === 'open';
+    if (wasFirst && !password) { notice('Choose a password for the first admin.', 'info'); $('user-password').focus(); return; }
+    const created = await postJson('/v1/users', { email, role: wasFirst ? 'admin' : $('user-role').value, ...(password ? { password } : {}) });
+    $('user-email').value = '';
+    $('user-password').value = '';
+    if (wasFirst) {
+      // Sign in as the new admin straight away so the page keeps working now that sign-in is on.
+      const response = await fetch('/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+      if (response.ok) { state.auth.csrf = (await response.json()).csrf; state.auth.mode = 'login'; await startup(); notice('Sign-in is now on. You are signed in as the new admin.', 'info'); go('#/admin'); return; }
+    }
+    if (created.temporary_password) {
+      showUserSecret(`Temporary password for ${created.email}`, created.temporary_password,
+        'Give it to them securely. It is shown once, and they must replace it the first time they sign in.');
+    } else {
+      hideUserReveal();
+      notice(`Added ${created.email}. They must choose their own password the first time they sign in.`, 'info');
+    }
+    await loadUsers();
+  } catch (error) {
+    notice(error.message);
+  }
+}
+
+async function updateUser(user, change, undo) {
+  try {
+    await getJson(`/v1/users/${encodeURIComponent(user.id)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(change),
+    });
+    notice('');
+  } catch (error) {
+    notice(error.message);
+    if (undo) undo();
+  }
+  await loadUsers();
+}
+
+async function resetPassword(user) {
+  try {
+    const result = await postJson(`/v1/users/${encodeURIComponent(user.id)}/reset-password`);
+    showUserSecret(`New temporary password for ${user.email}`, result.temporary_password,
+      'They were signed out everywhere. It is shown once, and they must replace it when they sign in.');
+    await loadUsers();
+  } catch (error) {
+    notice(error.message);
+  }
+}
+
+async function removeUser(user) {
+  try {
+    await api(`/v1/users/${encodeURIComponent(user.id)}`, { method: 'DELETE' });
+    hideUserReveal();
+    notice(`Deleted ${user.email}.`, 'info');
+  } catch (error) {
+    notice(error.message);
+  }
+  await loadUsers();
+}
+
+/* --- admin: activity --- */
+const ACTIVITY_TEXT = {
+  'auth.login': ['Signed in', 'completed'], 'auth.login_failed': ['Failed sign-in', 'failed'],
+  'auth.login_blocked': ['Sign-in blocked', 'failed'], 'auth.logout': ['Signed out', 'cancelled'],
+  'auth.password_changed': ['Changed password', 'cancelled'],
+  'user.created': ['Added a person', 'cancelled'], 'user.updated': ['Changed a person', 'cancelled'],
+  'user.password_reset': ['Reset a password', 'cancelled'], 'user.deleted': ['Deleted a person', 'cancelled'],
+  'system.admin_created': ['First admin created', 'cancelled'],
+  'key.created': ['Created an API key', 'cancelled'], 'key.deleted': ['Deleted an API key', 'cancelled'],
+  'job.started': ['Started a job', 'cancelled'], 'job.cancelled': ['Cancelled a job', 'cancelled'],
+  'job.rechecked': ['Re-checked a job', 'cancelled'],
+};
+const ACTIVITY_FILTERS = [['all', 'All'], ['signins', 'Sign-ins'], ['people', 'People'], ['keys', 'API keys'], ['jobs', 'Jobs']];
+const ACTIVITY_PAGE = 50;
+
+function ago(iso) {
+  const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+function renderActivityChips() {
+  $('activity-chips').replaceChildren(...ACTIVITY_FILTERS.map(([value, label]) => {
+    const chip = el('button', { type: 'button', class: 'chip', 'aria-pressed': String(state.activity.category === value), text: label });
+    chip.addEventListener('click', () => { state.activity.category = value; loadActivity(true); });
+    return chip;
+  }));
+}
+
+function renderActivity() {
+  const { items, total } = state.activity;
+  $('activity-rows').replaceChildren(...items.map((item) => {
+    const [label, tone] = ACTIVITY_TEXT[item.action] || [item.action, 'cancelled'];
+    const who = el('td', { text: item.actor });
+    if (['key', 'server', 'system'].includes(item.actor_type)) who.append(el('span', { class: 'tag', text: item.actor_type }));
+    const what = el('td', {}, [el('span', { class: `badge ${tone}`, text: label })]);
+    if (item.target) what.append(el('span', { class: 'why', text: item.target }));
+    const extra = [item.detail, item.address && item.action.startsWith('auth.') ? `from ${item.address}` : ''].filter(Boolean).join(' · ');
+    return el('tr', {}, [el('td', { title: new Date(item.at).toLocaleString(), text: ago(item.at) }), who, what, el('td', { text: extra })]);
+  }));
+  $('activity-empty').hidden = items.length > 0;
+  $('activity-more').hidden = items.length >= total;
+  $('activity-count').textContent = total ? `Showing ${items.length} of ${total}` : '';
+}
+
+async function loadActivity(reset = true) {
+  if (!state.activity) state.activity = { category: 'all', items: [], total: 0 };
+  if (reset) state.activity.items = [];
+  renderActivityChips();
+  try {
+    const query = new URLSearchParams({ category: state.activity.category, limit: String(ACTIVITY_PAGE), offset: String(state.activity.items.length) });
+    const data = await getJson(`/v1/activity?${query}`);
+    state.activity.items = [...state.activity.items, ...data.items];
+    state.activity.total = data.total;
+    renderActivity();
+  } catch (error) {
+    if (error.status !== 401) notice(error.message);
+  }
+}
+
+function loadAdminPanel() {
+  loadUsers();
+  loadKeys();
+  loadActivity(true);
 }
 
 /* ---------- wiring ---------- */
 function initTabs() {
-  for (const name of TABS) $(`tab-${name}`).addEventListener('click', () => go(`#/${name}`));
+  for (const button of document.querySelectorAll('.tabs [role=tab]')) {
+    button.addEventListener('click', () => go(`#/${button.id.replace('tab-', '')}`));
+  }
   $('tab-verify').parentElement.addEventListener('keydown', (event) => {
-    const at = TABS.findIndex((name) => $(`tab-${name}`) === document.activeElement);
+    const tabs = NAV_TABS();
+    const at = tabs.indexOf(document.activeElement);
     if (at < 0) return;
-    const forward = (at + 1) % TABS.length, back = (at + TABS.length - 1) % TABS.length;
-    const next = { ArrowRight: forward, ArrowDown: forward, ArrowLeft: back, ArrowUp: back, Home: 0, End: TABS.length - 1 }[event.key];
+    const forward = (at + 1) % tabs.length, back = (at + tabs.length - 1) % tabs.length;
+    const next = { ArrowRight: forward, ArrowDown: forward, ArrowLeft: back, ArrowUp: back, Home: 0, End: tabs.length - 1 }[event.key];
     if (next === undefined) return;
     event.preventDefault();
-    $(`tab-${TABS[next]}`).focus();
-    go(`#/${TABS[next]}`);
+    tabs[next].focus();
+    go(`#/${tabs[next].id.replace('tab-', '')}`);
   });
 }
 
@@ -986,6 +1372,26 @@ function init() {
   $('recheck-stale').addEventListener('click', () => recheck('all'));
   $('refresh-jobs').addEventListener('click', loadJobs);
   $('key-create').addEventListener('submit', createKey);
+  $('login-form').addEventListener('submit', signIn);
+  $('pw-toggle').addEventListener('click', () => {
+    const show = $('login-password').type === 'password';
+    $('login-password').type = show ? 'text' : 'password';
+    $('pw-toggle').textContent = show ? 'Hide' : 'Show';
+    $('pw-toggle').setAttribute('aria-pressed', String(show));
+  });
+  $('who-signout').addEventListener('click', signOut);
+  $('who-account').addEventListener('click', () => go('#/account'));
+  $('pw-form').addEventListener('submit', changePassword);
+  $('user-create').addEventListener('submit', createUser);
+  $('user-done').addEventListener('click', hideUserReveal);
+  $('activity-refresh').addEventListener('click', () => loadActivity(true));
+  $('activity-more').addEventListener('click', () => loadActivity(false));
+  $('user-copy').addEventListener('click', async () => {
+    const copied = await copyText($('user-secret').value, $('user-secret'));
+    $('user-copy').textContent = copied ? 'Copied' : 'Press Ctrl+C';
+    if (!copied) { $('user-secret').focus(); $('user-secret').select(); }
+    setTimeout(() => { $('user-copy').textContent = 'Copy'; }, 2500);
+  });
   $('key-copy').addEventListener('click', async () => {
     const copied = await copyText($('key-new').value, $('key-new'));
     $('key-copy').textContent = copied ? 'Copied' : 'Press Ctrl+C';
@@ -1001,21 +1407,7 @@ function init() {
   });
   $('key-done').addEventListener('click', () => hideReveal());
   window.addEventListener('beforeunload', (event) => {
-    if (!$('key-reveal').hidden) { event.preventDefault(); event.returnValue = ''; }   // the key cannot be shown again
-  });
-  $('key-form').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const value = $('api-key').value.trim();
-    if (value) setKey(value);
-    $('api-key').value = '';
-    await loadConfig();
-    route();
-  });
-  $('forget-key').addEventListener('click', async () => {
-    setKey('');
-    $('results').hidden = true;
-    $('single-result').hidden = true;
-    await loadConfig();
+    if (!$('key-reveal').hidden || !$('user-reveal').hidden) { event.preventDefault(); event.returnValue = ''; }   // the key cannot be shown again
   });
   window.addEventListener('hashchange', route);
   document.addEventListener('click', (event) => { if (!event.target.closest('#dl-menu')) $('dl-menu').open = false; });
@@ -1026,7 +1418,7 @@ function init() {
     else if (event.key.toLowerCase() === 'k') { event.preventDefault(); go('#/verify'); setTimeout(() => $('single-email').focus(), 80); }
   });
   buildApiTab();
-  loadConfig().then(route);
+  startup();
 }
 
 init();

@@ -37,7 +37,8 @@ On the instance, install Docker's maintained packages and copy the repository (a
 ```sh
 cd /opt/email-verifier
 cp .env.example .env && chmod 600 .env
-# Put a random key of at least 32 characters in EMAIL_VERIFIER_API_KEY:
+# Set EMAIL_VERIFIER_ADMIN_EMAIL and EMAIL_VERIFIER_ADMIN_PASSWORD (the first admin, created on first start).
+# Optionally add a server-wide EMAIL_VERIFIER_API_KEY (32+ characters):
 python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
@@ -45,19 +46,20 @@ The repository's `docker-compose.yml` runs one service, `api`, with these settin
 
 | Variable | Value / purpose |
 | --- | --- |
-| `EMAIL_VERIFIER_ENV=production` | The app refuses to start without an API key. |
-| `EMAIL_VERIFIER_API_KEY` | Required, 32+ characters, from `.env`. Never reuse an SSH secret; never commit `.env`. |
+| `EMAIL_VERIFIER_ENV=production` | The app refuses to start unless an admin account or an API key is configured. |
+| `EMAIL_VERIFIER_ADMIN_EMAIL`, `EMAIL_VERIFIER_ADMIN_PASSWORD` | Required in the compose file: the first admin account, created on startup if missing. After the first start you can remove the password line. Never commit `.env`. |
+| `EMAIL_VERIFIER_API_KEY` | Optional server-wide key, 32+ characters, for agents and scripts. Never reuse an SSH secret. |
 | `EMAIL_VERIFIER_DB=/data/jobs.sqlite3` | SQLite file on the `verifier_data` named volume. |
 | `EMAIL_VERIFIER_RATE_LIMIT_PER_MINUTE` | Per-key request cap, default 120 (`0` disables). Fixed window, in-process, so it is only correct with the single uvicorn worker the image uses. |
 | `VERIFIER_SMTP_ENABLED=false` | No SMTP probing. Leave it `false` (see below). |
 
-API keys: besides the server key, the **API** tab creates and deletes named per-agent keys (stored hashed in the same SQLite volume, so back them up with it). Use a separate key for each agent and delete it to revoke it.
+Accounts and keys: people sign in with an email and password (salted hashes, a 12-hour HttpOnly session cookie, CSRF protection, lockout after repeated failures), admins manage people and the activity log on the Admin page. Besides the server key, the **API** tab creates and deletes named per-agent keys (stored hashed in the same SQLite volume, so back them up with it). Use a separate key for each agent and delete it to revoke it.
 
 The port is published on `127.0.0.1:8080` only. Send the key as `X-API-Key: <key>` **or** `Authorization: Bearer <key>`; both are accepted and compared in constant time. `/healthz` is the only unauthenticated path. Reaching the API over the SSH tunnel is not a substitute for the key, and TLS in front of it would not be either; keep the key and any IP restrictions.
 
 API routes: `POST /v1/verify/email` (one address, answered immediately, nothing stored), `POST /v1/verify/csv`, `POST /v1/verify/xlsx` and `POST /v1/verify/sheet` (all return 202 with `job_id`; options `check_dns`, `allow_smtp`, `concurrency`), `GET /v1/config`, `GET /v1/jobs`, `GET /v1/jobs/{id}`, `POST /v1/jobs/{id}/cancel`, `POST /v1/jobs/{id}/recheck`, `GET /v1/jobs/{id}/results` and `GET /v1/jobs/{id}/results.csv` (both accept `send_only=true`). Limits: 2,000 unique addresses, 1.5 MB per CSV, 5 MB per `.xlsx`. Jobs interrupted by a restart are resumed on startup.
 
-**Web interface.** The same service serves a browser page at `/` (static files under `verifier/ui/`, copied into the image with the rest of `verifier/`). The page shell is the only unauthenticated content; every data route still needs the key, and `/docs` stays behind it. Open it through the same SSH tunnel at `http://127.0.0.1:8080/`. It sends the key as a header only and holds it in session storage; responses carry a strict Content-Security-Policy.
+**Web interface.** The same service serves a browser page at `/` (static files under `verifier/ui/`, copied into the image with the rest of `verifier/`). The page shell is the only unauthenticated content; every data route needs a sign-in session or an API key, and `/docs` stays behind that. Open it through the same SSH tunnel at `http://127.0.0.1:8080/` and sign in. The browser uses an HttpOnly session cookie (not an API key); responses carry a strict Content-Security-Policy.
 
 ```sh
 cd /opt/email-verifier
@@ -93,6 +95,7 @@ This verifier does **not** require SES and should not send mail. If a separately
 - [ ] Private SSH tested with a non-default administrator IP rule.
 - [ ] No public API listener (`ss -ltnp` shows only `127.0.0.1:8080`); security groups reviewed; outbound TCP/25 blocked.
 - [ ] Wrong key returns 401, both header styles work, and the 429 limit triggers (covered locally by `tests/test_api_security.py`).
+- [ ] Signing in works, five wrong passwords lock the account for a while, a new person is forced to change their temporary password, and a normal user gets 403 on the Admin routes (covered by `tests/test_accounts.py`).
 - [ ] `docker compose up --build` succeeds and `docker compose ps` reports healthy.
 - [ ] Volume backup restored into an isolated instance and a job read back.
 - [ ] A restart mid-job resumes it and loses no saved results.

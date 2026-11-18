@@ -297,12 +297,12 @@ async def test_interface_has_the_depth_control_cancel_and_accessible_tabs(tmp_pa
     async with client_for(make_app(tmp_path)) as client:
         html = (await client.get('/')).text
         for marker in ('id="depth"', 'role="radiogroup"', 'id="cancel-job"', 'id="recheck-unknown"',
-                       'id="run-summary"', 'id="forget-key"', 'role="tablist"', 'aria-orientation="vertical"',
+                       'id="run-summary"', 'role="tablist"', 'aria-orientation="vertical"',
                        'id="headline"', 'id="dl-menu"', 'class="sweep"'):
             assert marker in html
         assert 'id="single-depth"' not in html and 'id="bulk-depth"' not in html  # one shared setting
         assert 'type="checkbox"' not in html  # replaced by one depth selector
-        assert html.count('role="tab"') == 3 and 'tabindex="-1"' in html
+        assert html.count('role="tab"') == 4 and 'tabindex="-1"' in html
         assert 'ListSweep' in html and 'by DigitalPatron' in html
         assert 'disabled' not in html  # no pre-disabled buttons; the script explains what is missing
 
@@ -317,3 +317,22 @@ async def test_the_new_key_box_has_copy_download_and_done_and_never_hides_on_its
     assert 'execCommand' in source and 'beforeunload' in source      # copy fallback and the leave warning
     # the reveal box is hidden only by Done or by deleting a key, never by copying or switching tabs
     assert source.count("$('key-reveal').hidden = true") == 1       # inside hideReveal()
+
+
+async def test_admin_page_has_people_keys_and_activity_and_the_key_box_is_gone(tmp_path):
+    from pathlib import Path
+    async with client_for(make_app(tmp_path)) as client:
+        html = (await client.get('/')).text
+        for marker in ('id="panel-admin"', 'id="people-card"', 'id="keys-card"', 'id="activity-card"',
+                       'id="activity-chips"', 'id="activity-more"', 'id="login-form"', 'id="locked"',
+                       'id="panel-account"', 'id="who-signout"'):
+            assert marker in html
+        # the sidebar API-key box is removed for good: no form, no hidden fallback
+        for gone in ('id="key-form"', 'id="forget-key"', 'id="api-key"', 'keybox'):
+            assert gone not in html
+        assert 'EMAIL_VERIFIER_ADMIN_EMAIL' in html and 'EMAIL_VERIFIER_ADMIN_PASSWORD' in html   # the locked message
+    root = Path(__file__).resolve().parents[1] / 'verifier' / 'ui'
+    script, style = (root / 'app.js').read_text(), (root / 'style.css').read_text()
+    for gone in ('getKey', 'setKey', 'sessionStorage', 'ev_key', "'key-form'", "'forget-key'"):
+        assert gone not in script
+    assert 'keybox' not in style and 'keybtns' not in style

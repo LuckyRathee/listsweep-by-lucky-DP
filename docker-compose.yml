@@ -5,7 +5,9 @@ services:
     restart: unless-stopped
     environment:
       EMAIL_VERIFIER_ENV: production
-      EMAIL_VERIFIER_API_KEY: ${EMAIL_VERIFIER_API_KEY:?set a random key of 32+ characters in .env}
+      EMAIL_VERIFIER_ADMIN_EMAIL: ${EMAIL_VERIFIER_ADMIN_EMAIL:?set the first admin's email in .env}
+      EMAIL_VERIFIER_ADMIN_PASSWORD: ${EMAIL_VERIFIER_ADMIN_PASSWORD:?set the first admin's password in .env}
+      EMAIL_VERIFIER_API_KEY: ${EMAIL_VERIFIER_API_KEY:-}
       EMAIL_VERIFIER_DB: /data/jobs.sqlite3
       EMAIL_VERIFIER_RATE_LIMIT_PER_MINUTE: ${EMAIL_VERIFIER_RATE_LIMIT_PER_MINUTE:-120}
       VERIFIER_SMTP_ENABLED: "false"

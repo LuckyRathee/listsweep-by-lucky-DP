@@ -1,10 +1,10 @@
 """SQLite jobs and resumable result persistence."""
 import json
 import sqlite3
+import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-
 
 SCHEMA = '''
 PRAGMA journal_mode=WAL;
@@ -25,6 +25,19 @@ CREATE INDEX IF NOT EXISTS results_status_idx ON results(job_id, status);
 CREATE TABLE IF NOT EXISTS api_keys (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, prefix TEXT NOT NULL,
  created_at TEXT NOT NULL, last_used_at TEXT
+);
+CREATE TABLE IF NOT EXISTS users (
+ id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+ role TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', must_change INTEGER NOT NULL DEFAULT 0,
+ created_at TEXT NOT NULL, last_login_at TEXT
+);
+CREATE TABLE IF NOT EXISTS sessions (
+ token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, csrf TEXT NOT NULL, expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
+CREATE TABLE IF NOT EXISTS activity (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL, actor_type TEXT NOT NULL,
+ action TEXT NOT NULL, target TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS suppressions (
  email TEXT PRIMARY KEY, reason TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL
@@ -47,7 +60,7 @@ class Store:
 
     @staticmethod
     def now():
-        return datetime.now(timezone.utc).isoformat()
+        return datetime.now(UTC).isoformat()
 
     def create_job(self, rows, duplicate_count=0, options=None):
         job_id = str(uuid.uuid4())
@@ -180,6 +193,105 @@ class Store:
     def touch_key(self, key_id):
         with self._connect() as db:
             db.execute('UPDATE api_keys SET last_used_at=? WHERE id=?', (self.now(), key_id))
+
+    # --- accounts: password hashes and session-token hashes only ---
+    PUBLIC_USER = 'id, email, role, status, must_change, created_at, last_login_at'
+
+    def add_user(self, user_id, email, password_hash, role, must_change=False):
+        with self._connect() as db:
+            db.execute('INSERT INTO users(id, email, password_hash, role, status, must_change, created_at) VALUES (?,?,?,?,?,?,?)',
+                       (user_id, email, password_hash, role, 'active', int(must_change), self.now()))
+        return self.user(user_id)
+
+    def user(self, user_id):
+        with self._connect() as db:
+            row = db.execute(f'SELECT {self.PUBLIC_USER} FROM users WHERE id=?', (user_id,)).fetchone()
+            return dict(row) if row else None
+
+    def user_by_email(self, email):
+        with self._connect() as db:
+            row = db.execute('SELECT * FROM users WHERE email=?', (email,)).fetchone()
+            return dict(row) if row else None
+
+    def list_users(self):
+        with self._connect() as db:
+            return [dict(r) for r in db.execute(f'SELECT {self.PUBLIC_USER} FROM users ORDER BY created_at').fetchall()]
+
+    def count_users(self):
+        with self._connect() as db:
+            return db.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+
+    def count_active_admins(self):
+        with self._connect() as db:
+            return db.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND status='active'").fetchone()[0]
+
+    def update_user(self, user_id, role=None, status=None):
+        with self._connect() as db:
+            if role is not None:
+                db.execute('UPDATE users SET role=? WHERE id=?', (role, user_id))
+            if status is not None:
+                db.execute('UPDATE users SET status=? WHERE id=?', (status, user_id))
+
+    def set_password(self, user_id, password_hash, must_change):
+        with self._connect() as db:
+            db.execute('UPDATE users SET password_hash=?, must_change=? WHERE id=?', (password_hash, int(must_change), user_id))
+
+    def touch_login(self, user_id):
+        with self._connect() as db:
+            db.execute('UPDATE users SET last_login_at=? WHERE id=?', (self.now(), user_id))
+
+    def delete_user(self, user_id):
+        with self._connect() as db:
+            db.execute('DELETE FROM sessions WHERE user_id=?', (user_id,))
+            return db.execute('DELETE FROM users WHERE id=?', (user_id,)).rowcount > 0
+
+    def create_session(self, token_hash, user_id, csrf, expires_at):
+        with self._connect() as db:
+            db.execute('DELETE FROM sessions WHERE expires_at < ?', (time.time(),))
+            db.execute('INSERT INTO sessions(token_hash, user_id, csrf, expires_at) VALUES (?,?,?,?)',
+                       (token_hash, user_id, csrf, expires_at))
+
+    def session(self, token_hash):
+        """The signed-in user for a live session, or None (expired, signed out, or user disabled)."""
+        with self._connect() as db:
+            row = db.execute('''SELECT s.csrf, s.user_id, u.email, u.role, u.must_change FROM sessions s
+                JOIN users u ON u.id = s.user_id
+                WHERE s.token_hash=? AND s.expires_at > ? AND u.status='active' ''', (token_hash, time.time())).fetchone()
+            return dict(row) if row else None
+
+    def delete_session(self, token_hash):
+        with self._connect() as db:
+            db.execute('DELETE FROM sessions WHERE token_hash=?', (token_hash,))
+
+    def delete_user_sessions(self, user_id, keep_token_hash=None):
+        with self._connect() as db:
+            db.execute('DELETE FROM sessions WHERE user_id=? AND token_hash != ?', (user_id, keep_token_hash or ''))
+
+    # --- activity log: who did what; never contains passwords or keys ---
+    MAX_ACTIVITY = 5000
+
+    def log_activity(self, actor, actor_type, action, target='', detail='', address=''):
+        with self._connect() as db:
+            db.execute('INSERT INTO activity(at, actor, actor_type, action, target, detail, address) VALUES (?,?,?,?,?,?,?)',
+                       (self.now(), actor[:120], actor_type, action, target[:200], detail[:300], address[:64]))
+            db.execute('DELETE FROM activity WHERE id <= (SELECT id FROM activity ORDER BY id DESC LIMIT 1 OFFSET ?)',
+                       (self.MAX_ACTIVITY,))
+
+    def list_activity(self, prefixes=None, limit=50, offset=0):
+        where, params = '', []
+        if prefixes:
+            where = 'WHERE ' + ' OR '.join('action LIKE ?' for _ in prefixes)
+            params = [f'{prefix}%' for prefix in prefixes]
+        with self._connect() as db:
+            total = db.execute(f'SELECT COUNT(*) FROM activity {where}', params).fetchone()[0]
+            rows = db.execute(f'SELECT * FROM activity {where} ORDER BY id DESC LIMIT ? OFFSET ?',
+                              [*params, limit, offset]).fetchall()
+            return [dict(r) for r in rows], total
+
+    def key_name(self, key_id):
+        with self._connect() as db:
+            row = db.execute('SELECT name FROM api_keys WHERE id=?', (key_id,)).fetchone()
+            return row['name'] if row else None
 
     def suppressed(self, email):
         with self._connect() as db:
