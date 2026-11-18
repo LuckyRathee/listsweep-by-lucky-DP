@@ -160,6 +160,7 @@ async def test_real_stdio_client_discovers_tools_and_rejects_live_smtp(tmp_path)
             assert {tool.name for tool in tools.tools} == {
                 'verify_csv', 'verify_emails', 'get_verification_job',
                 'get_verification_results', 'export_verification_csv',
+                'cancel_verification_job', 'recheck_verification_job',
                 'record_hard_bounce', 'get_suppression',
             }
             response = await client.call_tool('verify_emails', {

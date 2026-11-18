@@ -168,11 +168,59 @@
       </section>
 
       <section id="panel-api" role="tabpanel" aria-labelledby="tab-api" hidden>
-        <header class="page-head"><h1>API</h1></header>
+        <header class="page-head">
+          <h1>API and agents</h1>
+          <p class="lede">Connect an agent or another app to ListSweep over HTTP (with an API key) or through MCP (local, no key).</p>
+        </header>
+
+        <div class="card" id="keys-card">
+          <h2>API keys</h2>
+          <p class="hint lead-hint">Make a separate key for each app or agent, so you can delete one without affecting the others. A key is shown once, when you create it.</p>
+          <div class="reveal" id="key-reveal" hidden>
+            <p class="reveal-title">Copy your new key now. You won't be able to see it again.</p>
+            <div class="reveal-row">
+              <input id="key-new" type="text" readonly aria-label="New API key" spellcheck="false">
+              <button type="button" class="btn" id="key-copy">Copy</button>
+            </div>
+            <p class="hint" id="key-note"></p>
+          </div>
+          <form class="keycreate" id="key-create" novalidate>
+            <label class="sr" for="key-name">Key name</label>
+            <input id="key-name" type="text" maxlength="60" placeholder="Name, for example Sales agent" autocomplete="off">
+            <button class="btn primary" type="submit">Create key</button>
+          </form>
+          <div class="scroll">
+            <table>
+              <thead><tr><th scope="col">Name</th><th scope="col">Key</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col"><span class="sr">Actions</span></th></tr></thead>
+              <tbody id="key-rows"></tbody>
+            </table>
+          </div>
+          <p class="hint" id="key-empty" hidden></p>
+          <p class="hint" id="key-server" hidden></p>
+        </div>
+
         <div class="card">
-          <h2>Use the API</h2>
+          <h2>Connect an agent</h2>
+          <div class="method">
+            <h3>Option A: HTTP API <span class="tag">needs an API key</span></h3>
+            <p class="hint">Best when your agent or app can make web requests, including from another computer.</p>
+            <ol class="how" id="how-http"></ol>
+            <div id="agent-instructions"></div>
+          </div>
+          <div class="method">
+            <h3>Option B: MCP <span class="tag">no key needed</span></h3>
+            <p class="hint">Best for agents that support MCP tools. The agent starts ListSweep itself, on the same computer, so nothing is sent over a network.</p>
+            <ol class="how" id="how-mcp"></ol>
+            <div id="mcp-blocks"></div>
+            <h4>Tools your agent gets</h4>
+            <div class="scroll"><table><thead><tr><th scope="col">Tool</th><th scope="col">What it does</th></tr></thead><tbody id="mcp-tools"></tbody></table></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>HTTP examples</h2>
           <p>Base URL: <code id="base-url"></code></p>
-          <p class="hint">Send your key as <code>X-API-Key: &lt;key&gt;</code> or <code>Authorization: Bearer &lt;key&gt;</code>. Replace <code>YOUR_KEY</code> below. The key typed in the sidebar is never written into these examples.</p>
+          <p class="hint">Send your key as <code>X-API-Key: &lt;key&gt;</code> or <code>Authorization: Bearer &lt;key&gt;</code>. Replace <code>YOUR_KEY</code> with a key from above.</p>
           <div id="examples"></div>
         </div>
         <div class="card">

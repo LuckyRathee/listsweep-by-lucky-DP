@@ -83,6 +83,10 @@ const ROUTES = [
   ['GET /v1/jobs/{id}/results', 'Results as JSON (send_only, offset, limit)'],
   ['GET /v1/jobs/{id}/results.csv', 'Results as CSV (send_only)'],
   ['POST /v1/jobs/{id}/cancel', 'Stop a queued or running job; finished rows are kept'],
+  ['GET /v1/keys', 'List API keys (name, prefix, dates; never the key itself)'],
+  ['POST /v1/keys', 'JSON {name}; create a key. The key is returned once'],
+  ['DELETE /v1/keys/{id}', 'Delete a key; it stops working immediately'],
+  ['GET /v1/mcp-config', 'MCP settings filled in for this server'],
   ['POST /v1/jobs/{id}/recheck', "JSON {scope: 'unknown' | 'all'}; start a new job from a finished one"],
 ];
 
@@ -319,6 +323,7 @@ function showTab(name) {
     $(`panel-${tab}`).hidden = !selected;
   }
   if (name === 'jobs') loadJobs();
+  if (name === 'api') loadApiPanel();
 }
 
 function route() {
@@ -753,10 +758,146 @@ async function loadJobs() {
   }
 }
 
-/* ---------- API tab ---------- */
-function buildApiTab() {
+/* ---------- API and agents ---------- */
+function copyButton(getText, label = 'Copy') {
+  const button = el('button', { type: 'button', class: 'btn small', text: label });
+  button.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(getText()); button.textContent = 'Copied'; } catch { button.textContent = 'Copy failed'; }
+    setTimeout(() => { button.textContent = label; }, 1500);
+  });
+  return button;
+}
+
+function codeBlock(title, code) {
+  return el('div', { class: 'example' }, [
+    el('div', { class: 'toolbar' }, [el('h3', { text: title }), el('span', { class: 'grow' }), copyButton(() => code)]),
+    el('pre', { text: code }),
+  ]);
+}
+
+const shellQuote = (value) => (/^[A-Za-z0-9_\/.:@%+=,-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`);
+const when = (iso) => (iso ? new Date(iso).toLocaleString() : 'Never');
+
+async function loadKeys() {
+  try {
+    const { keys, server_key: serverKey, max_keys: maxKeys } = await getJson('/v1/keys');
+    state.keys = keys;
+    const mine = getKey().slice(0, 8);
+    $('key-rows').replaceChildren(...keys.map((key) => {
+      const del = el('button', { type: 'button', class: 'btn small', text: 'Delete' });
+      let armed = null;
+      del.addEventListener('click', async () => {
+        if (!armed) {
+          del.textContent = 'Confirm delete';
+          armed = setTimeout(() => { armed = null; del.textContent = 'Delete'; }, 4000);
+          return;
+        }
+        clearTimeout(armed);
+        await deleteKey(key, mine && key.prefix === mine);
+      });
+      const name = el('td', { text: key.name });
+      if (mine && key.prefix === mine) name.append(el('span', { class: 'tag', text: 'this browser' }));
+      return el('tr', {}, [name, el('td', { class: 'keyid', text: `${key.prefix}…` }), el('td', { text: when(key.created_at) }),
+        el('td', { text: when(key.last_used_at) }), el('td', {}, del)]);
+    }));
+    $('key-empty').hidden = keys.length > 0;
+    $('key-empty').textContent = serverKey
+      ? 'No keys yet. The server key set at startup still works.'
+      : 'No keys yet, so ListSweep is open to anyone who can reach it. Create a key to switch authentication on.';
+    $('key-server').hidden = !serverKey;
+    $('key-server').textContent = 'A server key is also set when the server starts. It always works and cannot be deleted here.';
+    $('key-create').querySelector('button').disabled = keys.length >= maxKeys;
+  } catch (error) {
+    if (error.status !== 401) notice(error.message);
+  }
+}
+
+async function createKey(event) {
+  event.preventDefault();
+  const name = $('key-name').value.trim();
+  if (!name) { notice('Give the key a name, for example the agent that will use it.', 'info'); $('key-name').focus(); return; }
+  notice('');
+  const wasOpen = !state.needKey;
+  try {
+    const created = await postJson('/v1/keys', { name });
+    $('key-new').value = created.key;
+    $('key-reveal').hidden = false;
+    $('key-note').textContent = wasOpen
+      ? 'Authentication is now on, because a key exists. This browser is signed in with this key. Anything that used ListSweep without a key will now need one.'
+      : 'Store it somewhere safe. ListSweep keeps only a fingerprint of it, so it cannot be shown again.';
+    $('key-name').value = '';
+    if (wasOpen) { setKey(created.key); await loadConfig(); }
+    $('key-new').focus();
+    $('key-new').select();
+    await loadKeys();
+    renderHttpConnect(created.key.slice(0, 8));
+  } catch (error) {
+    notice(error.message);
+  }
+}
+
+async function deleteKey(key, wasThisBrowser) {
+  try {
+    await api(`/v1/keys/${encodeURIComponent(key.id)}`, { method: 'DELETE' });
+    $('key-reveal').hidden = true;
+    if (wasThisBrowser) { setKey(''); await loadConfig(); }
+    notice(`Deleted "${key.name}". It stopped working immediately.`, 'info');
+    await loadKeys();
+  } catch (error) {
+    notice(error.message);
+  }
+}
+
+function renderHttpConnect() {
   const base = location.origin;
-  $('base-url').textContent = base;
+  $('how-http').replaceChildren(
+    el('li', { text: 'Create a key above and copy it. Make one per agent.' }),
+    el('li', {}, [document.createTextNode('Point the agent at this address: '), el('code', { text: base }),
+      document.createTextNode(base.includes('127.0.0.1') || base.includes('localhost') ? '. That only works on this computer. For another computer, run ListSweep on a server (see the deployment guide) and use its address.' : '.')]),
+    el('li', {}, [document.createTextNode('Have it send the key in a header on every request: '), el('code', { text: 'X-API-Key: YOUR_KEY' }),
+      document.createTextNode(' (or '), el('code', { text: 'Authorization: Bearer YOUR_KEY' }), document.createTextNode(').')]),
+    el('li', { text: 'Give it the instructions below, or the examples further down.' }),
+  );
+  const text = [
+    'You can verify email addresses with ListSweep.',
+    `Base URL: ${base}`,
+    'Authentication: send the header "X-API-Key: YOUR_KEY" on every request (or "Authorization: Bearer YOUR_KEY").',
+    '',
+    'Check one address: POST /v1/verify/email with JSON {"email": "name@company.com", "check_dns": true, "allow_smtp": true}',
+    'Check a list: POST /v1/verify/csv (multipart field "file"), then poll GET /v1/jobs/{job_id} until status is "completed",',
+    '  then read GET /v1/jobs/{job_id}/results (add ?send_only=true for send-eligible rows only).',
+    'Stop a job: POST /v1/jobs/{job_id}/cancel. Re-run unresolved addresses: POST /v1/jobs/{job_id}/recheck.',
+    '',
+    'How to read results: "deliverable_candidate" is evidence, not a guarantee. "unknown" is never valid.',
+    'Only rows with send_eligible=true are reasonable to contact, and that is a filter, not consent to send.',
+    'If reason is "smtp_blocked_by_policy", the recipient server refused our network, so retry later instead of treating it as invalid.',
+  ].join('\n');
+  $('agent-instructions').replaceChildren(codeBlock('Instructions to paste into your agent', text));
+}
+
+async function loadMcpConfig() {
+  try {
+    const cfg = await getJson('/v1/mcp-config');
+    const json = JSON.stringify({ mcpServers: { listsweep: { command: cfg.command, args: cfg.args, env: cfg.env } } }, null, 2);
+    const envFlags = Object.entries(cfg.env).map(([k, v]) => `-e ${shellQuote(`${k}=${v}`)}`).join(' ');
+    const command = `claude mcp add listsweep ${envFlags} -- ${shellQuote(cfg.command)} ${cfg.args.join(' ')}`;
+    $('how-mcp').replaceChildren(
+      el('li', { text: 'Run your agent on the same computer as ListSweep. The paths below come from the computer running this server.' }),
+      el('li', { text: "Add the settings below to your agent's MCP configuration. For Claude Desktop that is the claude_desktop_config.json file; for Claude Code, run the command instead." }),
+      el('li', { text: 'Restart the agent. It should now list tools such as verify_emails.' }),
+      el('li', { text: 'No key is needed: the agent starts ListSweep as its own local process. Never expose it to a network. Use HTTP with a key for that.' }),
+      el('li', { text: 'The database path in the settings makes jobs your agent runs appear in the Jobs tab here.' }),
+    );
+    $('mcp-blocks').replaceChildren(codeBlock('MCP settings (JSON)', json), codeBlock('Or add it to Claude Code', command));
+    $('mcp-tools').replaceChildren(...cfg.tools.map((tool) => el('tr', {}, [el('td', {}, el('code', { text: tool.name })), el('td', { text: tool.description })])));
+  } catch (error) {
+    if (error.status !== 401) notice(error.message);
+  }
+}
+
+function buildApiTab() {
+  $('base-url').textContent = location.origin;
+  const base = location.origin;
   const examples = [
     ['Check one address', `curl -H "X-API-Key: YOUR_KEY" -H "Content-Type: application/json" \\\n  -d '{"email": "name@company.com", "check_dns": true, "allow_smtp": true}' \\\n  ${base}/v1/verify/email`],
     ['Check a CSV file', `curl -H "X-API-Key: YOUR_KEY" \\\n  -F file=@leads.csv -F check_dns=true \\\n  ${base}/v1/verify/csv`],
@@ -765,19 +906,15 @@ function buildApiTab() {
     ['Poll, download, cancel or re-check a job', `curl -H "X-API-Key: YOUR_KEY" ${base}/v1/jobs/JOB_ID\ncurl -H "X-API-Key: YOUR_KEY" "${base}/v1/jobs/JOB_ID/results.csv?send_only=true" -OJ\ncurl -X POST -H "X-API-Key: YOUR_KEY" ${base}/v1/jobs/JOB_ID/cancel\ncurl -X POST -H "X-API-Key: YOUR_KEY" -H "Content-Type: application/json" \\\n  -d '{"scope": "unknown"}' ${base}/v1/jobs/JOB_ID/recheck`],
     ['Python', `import time, requests\n\nBASE, HEADERS = "${base}", {"X-API-Key": "YOUR_KEY"}\n\nwith open("leads.csv", "rb") as f:\n    job = requests.post(f"{BASE}/v1/verify/csv", headers=HEADERS,\n                        files={"file": f}, data={"check_dns": "true"}).json()\n\nwhile True:\n    status = requests.get(f"{BASE}/v1/jobs/{job['job_id']}", headers=HEADERS).json()\n    if status["status"] in ("completed", "failed", "cancelled"):\n        break\n    time.sleep(2)\n\nrows = requests.get(f"{BASE}/v1/jobs/{job['job_id']}/results", headers=HEADERS).json()`],
   ];
-  $('examples').replaceChildren(...examples.map(([title, code]) => {
-    const copy = el('button', { type: 'button', class: 'btn small', text: 'Copy' });
-    copy.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(code); copy.textContent = 'Copied'; } catch { copy.textContent = 'Copy failed'; }
-      setTimeout(() => { copy.textContent = 'Copy'; }, 1500);
-    });
-    return el('div', { class: 'example' }, [
-      el('div', { class: 'toolbar' }, [el('h3', { text: title }), el('span', { class: 'grow' }), copy]),
-      el('pre', { text: code }),
-    ]);
-  }));
+  $('examples').replaceChildren(...examples.map(([title, code]) => codeBlock(title, code)));
   $('route-rows').replaceChildren(...ROUTES.map(([route, purpose]) =>
     el('tr', {}, [el('td', {}, el('code', { text: route })), el('td', { text: purpose })])));
+  renderHttpConnect();
+}
+
+function loadApiPanel() {
+  loadKeys();
+  loadMcpConfig();
 }
 
 /* ---------- wiring ---------- */
@@ -819,6 +956,11 @@ function init() {
   $('recheck-unknown').addEventListener('click', () => recheck('unknown'));
   $('recheck-stale').addEventListener('click', () => recheck('all'));
   $('refresh-jobs').addEventListener('click', loadJobs);
+  $('key-create').addEventListener('submit', createKey);
+  $('key-copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText($('key-new').value); $('key-copy').textContent = 'Copied'; } catch { $('key-copy').textContent = 'Copy failed'; }
+    setTimeout(() => { $('key-copy').textContent = 'Copy'; }, 1500);
+  });
   $('key-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const value = $('api-key').value.trim();

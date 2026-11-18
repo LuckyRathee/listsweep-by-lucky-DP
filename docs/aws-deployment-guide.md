@@ -2,7 +2,7 @@
 
 This supplement covers deploying the conservative email-verification API.
 
-**Status: nothing is deployed to AWS.** This guide describes how to deploy the code in this repository to a single EC2 instance; no instance, security group, or AWS integration exists yet. The application code and its 128 tests pass locally (`pytest`), but the `Dockerfile` and `docker-compose.yml` have **not been built or run** (Docker was not available when they were written), so treat the first `docker compose up --build` as the first real test.
+**Status: nothing is deployed to AWS.** This guide describes how to deploy the code in this repository to a single EC2 instance; no instance, security group, or AWS integration exists yet. The application code and its 140 tests pass locally (`pytest`), but the `Dockerfile` and `docker-compose.yml` have **not been built or run** (Docker was not available when they were written), so treat the first `docker compose up --build` as the first real test.
 
 **Storage is SQLite on a Docker named volume.** PostgreSQL is *not* implemented: `verifier/store.py` uses `sqlite3` only, and there is no `DATABASE_URL` setting. Moving to PostgreSQL is a separate work item (store rewrite, migrations, backup/restore), not a configuration change. Names, ports, and environment variables below match the code as of this revision.
 
@@ -50,6 +50,8 @@ The repository's `docker-compose.yml` runs one service, `api`, with these settin
 | `EMAIL_VERIFIER_DB=/data/jobs.sqlite3` | SQLite file on the `verifier_data` named volume. |
 | `EMAIL_VERIFIER_RATE_LIMIT_PER_MINUTE` | Per-key request cap, default 120 (`0` disables). Fixed window, in-process, so it is only correct with the single uvicorn worker the image uses. |
 | `VERIFIER_SMTP_ENABLED=false` | No SMTP probing. Leave it `false` (see below). |
+
+API keys: besides the server key, the **API** tab creates and deletes named per-agent keys (stored hashed in the same SQLite volume, so back them up with it). Use a separate key for each agent and delete it to revoke it.
 
 The port is published on `127.0.0.1:8080` only. Send the key as `X-API-Key: <key>` **or** `Authorization: Bearer <key>`; both are accepted and compared in constant time. `/healthz` is the only unauthenticated path. Reaching the API over the SSH tunnel is not a substitute for the key, and TLS in front of it would not be either; keep the key and any IP restrictions.
 

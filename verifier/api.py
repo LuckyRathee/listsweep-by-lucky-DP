@@ -8,7 +8,10 @@ import hashlib
 import hmac
 import os
 import re
+import secrets
+import sys
 import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -18,6 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .connect_info import MCP_TOOLS
 from .csv_input import MAX_EMAILS, export_all_csv, export_send_csv
 from .job_service import RESULT_VERSION, JobService
 from .sheets_input import fetch_sheet_csv
@@ -40,6 +44,13 @@ class EmailRequest(BaseModel):
     email: str = Field(max_length=320)
     allow_smtp: bool | None = None  # None: use SMTP whenever the server has it enabled
     check_dns: bool = False
+
+
+MAX_KEYS = 50
+
+
+class KeyRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
 
 
 class RecheckRequest(BaseModel):
@@ -132,15 +143,35 @@ def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, 
             response.headers[name] = value
         return response
 
+    last_touched: dict[str, float] = {}
+
+    def auth_required() -> bool:
+        return expected is not None or service.store.count_keys() > 0
+
+    def identify(supplied: bytes) -> str | None:
+        """Who is this key? 'server' for the environment key, a key id for a managed key, else None."""
+        if expected is not None and hmac.compare_digest(supplied, expected):
+            return 'server'
+        digest = hashlib.sha256(supplied).hexdigest().encode()
+        for stored, key_id in service.store.key_hashes().items():
+            if hmac.compare_digest(digest, stored.encode()):
+                return key_id
+        return None
+
     async def _authorize(request: Request, call_next):
         if is_public_path(request.url.path):
             return await call_next(request)
         identity = 'anonymous'
-        if expected is not None:
+        if auth_required():
             supplied = _supplied_key(request)
-            if not hmac.compare_digest(supplied, expected):
+            who = identify(supplied)
+            if who is None:
                 return JSONResponse(status_code=401, content={'detail': 'invalid_api_key'})
-            identity = hashlib.sha256(supplied).hexdigest()
+            identity = who
+            now = time.monotonic()
+            if who != 'server' and now - last_touched.get(who, -120.0) > 60:   # at most once a minute
+                last_touched[who] = now
+                service.store.touch_key(who)
         if not limiter.allow(identity):
             return JSONResponse(status_code=429, content={'detail': 'rate_limited'},
                                 headers={'Retry-After': '60'})
@@ -216,7 +247,7 @@ def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, 
             'max_csv_bytes': MAX_UPLOAD_BYTES,
             'max_xlsx_bytes': MAX_XLSX_BYTES,
             'concurrency_range': [1, 25],
-            'auth_required': expected is not None,
+            'auth_required': auth_required(),
         }
 
     @application.get('/v1/jobs')
@@ -277,6 +308,41 @@ def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, 
         except ValueError as error:
             raise HTTPException(409 if 'Wait' in str(error) else 422, str(error)) from error
         return {**service.get_job(new_id), 'job_id': new_id}
+
+    @application.get('/v1/keys')
+    async def list_keys():
+        return {'keys': service.store.list_keys(), 'server_key': expected is not None,
+                'max_keys': MAX_KEYS}
+
+    @application.post('/v1/keys', status_code=201)
+    async def create_key(body: KeyRequest):
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(422, 'Give the key a name')
+        if service.store.count_keys() >= MAX_KEYS:
+            raise HTTPException(409, f'You can have at most {MAX_KEYS} keys; delete one first')
+        secret = 'ls_' + secrets.token_urlsafe(32)
+        record = service.store.add_key(str(uuid.uuid4()), name, hashlib.sha256(secret.encode()).hexdigest(),
+                                       secret[:8])
+        return {**record, 'key': secret}   # the only time the key itself is ever returned
+
+    @application.delete('/v1/keys/{key_id}', status_code=204)
+    async def delete_key(key_id: str):
+        if not service.store.delete_key(key_id):
+            raise HTTPException(404, 'key_not_found')
+
+    @application.get('/v1/mcp-config')
+    async def mcp_config():
+        """Settings for connecting an MCP client, filled in from how this server is running."""
+        env = {'PYTHONPATH': str(Path(__file__).resolve().parent.parent),
+               'VERIFIER_DB': str(Path(service.store.path).resolve())}
+        if service.smtp_enabled:
+            env['VERIFIER_SMTP_ENABLED'] = 'true'
+            for name in ('VERIFIER_HELO_DOMAIN', 'VERIFIER_MAIL_FROM'):
+                if os.getenv(name):
+                    env[name] = os.environ[name]
+        return {'command': sys.executable, 'args': ['-m', 'verifier.mcp_connector'], 'env': env,
+                'tools': [{'name': n, 'description': d} for n, d in MCP_TOOLS]}
 
     @application.get('/', include_in_schema=False)
     async def index():

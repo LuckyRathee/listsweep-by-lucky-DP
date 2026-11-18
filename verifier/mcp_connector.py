@@ -31,10 +31,10 @@ def make_service():
     return JobService(db)
 
 
-async def submit_csv(service, content, allow_smtp=False, concurrency=4):
+async def submit_csv(service, content, allow_smtp=False, concurrency=4, check_dns=False):
     if isinstance(content, str):
         content = content.encode('utf-8')
-    return service.submit_csv(content, allow_smtp=allow_smtp, concurrency=concurrency)
+    return service.submit_csv(content, allow_smtp=allow_smtp, concurrency=concurrency, check_dns=check_dns)
 
 
 def create_mcp(service):
@@ -51,14 +51,23 @@ def create_mcp(service):
         job = service.get_job(job_id)
         return {**job, 'job_id': job_id, **DISCLAIMER}
 
-    @mcp.tool(description='Start one verification job for up to 2,000 unique email strings. Leave allow_smtp false for offline syntax-only checks. DNS and SMTP only occur when explicitly configured. ' + NOTE)
-    async def verify_emails(emails: list[str], allow_smtp: bool = False, concurrency: int = 4) -> dict[str, Any]:
-        job_id = service.submit_emails(emails, allow_smtp, concurrency)
+    def smtp_default(allow_smtp):
+        """Unspecified means: check mailboxes whenever this server has SMTP enabled."""
+        return service.smtp_enabled if allow_smtp is None else allow_smtp
+
+    CHECKS = (' check_dns adds domain mail-record checks (MX, null MX). allow_smtp adds the mailbox check and '
+              'defaults to on when the server has SMTP enabled. With neither, only the address format is checked. ')
+
+    @mcp.tool(description='Start one verification job for up to 2,000 unique email strings.' + CHECKS + NOTE)
+    async def verify_emails(emails: list[str], allow_smtp: bool | None = None, concurrency: int = 4,
+                            check_dns: bool = False) -> dict[str, Any]:
+        job_id = service.submit_emails(emails, smtp_default(allow_smtp), concurrency, check_dns)
         return summary(job_id)
 
-    @mcp.tool(description='Verify a local CSV or supplied UTF-8 CSV text containing an email column. Maximum 2,000 unique addresses. Other business columns are retained for review/export. ' + NOTE)
+    @mcp.tool(description='Verify a local CSV or supplied UTF-8 CSV text containing an email column. Maximum 2,000 unique addresses. Other business columns are retained for review/export.' + CHECKS + NOTE)
     async def verify_csv(csv_path: str | None = None, csv_text: str | None = None,
-                         allow_smtp: bool = False, concurrency: int = 4) -> dict[str, Any]:
+                         allow_smtp: bool | None = None, concurrency: int = 4,
+                         check_dns: bool = False) -> dict[str, Any]:
         if bool(csv_path) == bool(csv_text):
             raise ValueError('Supply exactly one of csv_path or csv_text')
         if csv_path:
@@ -72,7 +81,7 @@ def create_mcp(service):
             content = path.read_bytes()
         else:
             content = csv_text.encode('utf-8')
-        return summary(service.submit_csv(content, allow_smtp, concurrency))
+        return summary(service.submit_csv(content, smtp_default(allow_smtp), concurrency, check_dns=check_dns))
 
     @mcp.tool(description='Read verification job status and aggregate counts. Read-only. ' + NOTE)
     async def get_verification_job(job_id: str) -> dict[str, Any]:
@@ -86,6 +95,17 @@ def create_mcp(service):
                                       offset: int = 0, limit: int = 1000) -> dict[str, Any]:
         return {'job_id': job_id, 'send_only': send_only, 'offset': offset,
                 'results': service.get_results(job_id, send_only, offset, limit), **DISCLAIMER}
+
+    @mcp.tool(description='Stop a queued or running job. Addresses already checked are kept. ' + NOTE)
+    async def cancel_verification_job(job_id: str) -> dict[str, Any]:
+        service.cancel(job_id)
+        await asyncio.sleep(0)   # let the cancelled task record its status
+        return summary(job_id)
+
+    @mcp.tool(description="Start a new job from a finished job: scope 'unknown' re-runs the unresolved addresses, 'all' re-runs everything. Optionally go deeper with check_dns or allow_smtp. " + NOTE)
+    async def recheck_verification_job(job_id: str, scope: str = 'unknown', allow_smtp: bool | None = None,
+                                       check_dns: bool | None = None) -> dict[str, Any]:
+        return summary(service.recheck(job_id, scope, check_dns=check_dns, allow_smtp=allow_smtp))
 
     @mcp.tool(description='Write a UTF-8 CSV report to a new file. send_only filters candidates; it does not prove delivery or establish sending consent. ' + NOTE)
     async def export_verification_csv(job_id: str, send_only: bool = False) -> dict[str, Any]:

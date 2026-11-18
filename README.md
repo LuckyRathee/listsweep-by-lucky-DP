@@ -103,6 +103,8 @@ Authenticate with `X-API-Key: <key>` **or** `Authorization: Bearer <key>`.
 | `POST /v1/verify/xlsx` | Same, for an Excel `.xlsx` file |
 | `POST /v1/verify/sheet` | JSON `{"url": "...", "check_dns": true}` for a publicly shared Google Sheet |
 | `GET /v1/jobs` | Recent jobs, newest first |
+| `GET /v1/keys`, `POST /v1/keys`, `DELETE /v1/keys/{id}` | List, create (key returned once) and delete API keys |
+| `GET /v1/mcp-config` | MCP settings filled in for this server |
 | `GET /v1/jobs/{id}` | Status, progress, counts and a count per reason |
 | `POST /v1/jobs/{id}/cancel` | Stop a queued or running job; finished rows are kept |
 | `POST /v1/jobs/{id}/recheck` | JSON `{"scope": "unknown"}` or `"all"`; start a new job from a finished one |
@@ -111,15 +113,35 @@ Authenticate with `X-API-Key: <key>` **or** `Authorization: Bearer <key>`.
 
 Jobs are stored in SQLite and resume after a restart.
 
-## Use it from Claude (MCP)
+## Connect an agent
 
-The MCP server is separate from the web page. A local stdio MCP server exposes the same engine as tools: `verify_emails`, `verify_csv`, `get_verification_job`, `get_verification_results`, `export_verification_csv`, `record_hard_bounce` and `get_suppression`.
+The **API** tab in the app walks through both options with your server's real paths filled in. In short:
 
-```sh
-python -m verifier.mcp_connector
+### Option A: HTTP API with a key
+1. Open the **API** tab and create a key (name it after the agent). Keys look like `ls_...`, are unique, and are shown once; only a fingerprint is stored. Delete a key there and it stops working immediately.
+2. Point the agent at the server's address and send the key on every request, as `X-API-Key: <key>` or `Authorization: Bearer <key>`.
+3. The tab includes ready-to-paste agent instructions and `curl` and Python examples.
+
+Authentication switches on as soon as the first key exists. Setting `EMAIL_VERIFIER_API_KEY` adds a server key that always works and cannot be deleted from the page.
+
+### Option B: MCP (local, no key)
+The MCP server is a local process the agent starts itself, so nothing goes over a network and there is no key. Add this to the agent's MCP settings (the API tab shows it with your paths):
+
+```json
+{
+  "mcpServers": {
+    "listsweep": {
+      "command": "/path/to/venv/bin/python",
+      "args": ["-m", "verifier.mcp_connector"],
+      "env": { "PYTHONPATH": "/path/to/lead-email-verifier", "VERIFIER_DB": "/path/to/lead-email-verifier/data/jobs.sqlite3" }
+    }
+  }
+}
 ```
 
-Hard-bounce feedback goes into a local suppression list that is checked before any DNS or SMTP work.
+Add `VERIFIER_SMTP_ENABLED`, `VERIFIER_HELO_DOMAIN` and `VERIFIER_MAIL_FROM` to `env` to allow mailbox checks. Setting `VERIFIER_DB` to the app's database makes jobs your agent runs show up in the Jobs tab.
+
+Tools: `verify_emails`, `verify_csv`, `get_verification_job`, `get_verification_results`, `export_verification_csv`, `cancel_verification_job`, `recheck_verification_job`, `record_hard_bounce` and `get_suppression`. Like the web app, the check tools take `check_dns` and `allow_smtp`; `allow_smtp` defaults to on when the server has SMTP enabled. Hard-bounce feedback goes into a local suppression list that is checked before any DNS or SMTP work.
 
 ## Configuration
 

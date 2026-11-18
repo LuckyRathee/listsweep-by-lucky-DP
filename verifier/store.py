@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS results (
  metadata TEXT NOT NULL DEFAULT '{}', PRIMARY KEY (job_id, position)
 );
 CREATE INDEX IF NOT EXISTS results_status_idx ON results(job_id, status);
+CREATE TABLE IF NOT EXISTS api_keys (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, prefix TEXT NOT NULL,
+ created_at TEXT NOT NULL, last_used_at TEXT
+);
 CREATE TABLE IF NOT EXISTS suppressions (
  email TEXT PRIMARY KEY, reason TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL
 );
@@ -147,6 +151,35 @@ class Store:
                 and not row['disposable']
             )
         return rows
+
+    # --- API keys: only a SHA-256 hash and a short display prefix are stored, never the key ---
+    def add_key(self, key_id, name, key_hash, prefix):
+        with self._connect() as db:
+            db.execute('INSERT INTO api_keys(id, name, key_hash, prefix, created_at) VALUES (?,?,?,?,?)',
+                       (key_id, name, key_hash, prefix, self.now()))
+            return dict(db.execute('SELECT id, name, prefix, created_at, last_used_at FROM api_keys WHERE id=?',
+                                   (key_id,)).fetchone())
+
+    def list_keys(self):
+        with self._connect() as db:
+            return [dict(r) for r in db.execute(
+                'SELECT id, name, prefix, created_at, last_used_at FROM api_keys ORDER BY created_at DESC').fetchall()]
+
+    def key_hashes(self):
+        with self._connect() as db:
+            return {row['key_hash']: row['id'] for row in db.execute('SELECT id, key_hash FROM api_keys').fetchall()}
+
+    def count_keys(self):
+        with self._connect() as db:
+            return db.execute('SELECT COUNT(*) FROM api_keys').fetchone()[0]
+
+    def delete_key(self, key_id):
+        with self._connect() as db:
+            return db.execute('DELETE FROM api_keys WHERE id=?', (key_id,)).rowcount > 0
+
+    def touch_key(self, key_id):
+        with self._connect() as db:
+            db.execute('UPDATE api_keys SET last_used_at=? WHERE id=?', (self.now(), key_id))
 
     def suppressed(self, email):
         with self._connect() as db:
