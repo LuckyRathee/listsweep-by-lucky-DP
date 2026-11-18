@@ -38,7 +38,7 @@
       </form>
       <div class="single-opts">
         <label class="check"><input type="checkbox" id="single-dns" checked> Also check the domain's mail records</label>
-        <label class="check" id="single-smtp-row" hidden><input type="checkbox" id="single-smtp"> Live mailbox check (SMTP)</label>
+        <label class="check" id="single-smtp-row" hidden><input type="checkbox" id="single-smtp" checked> Live mailbox check (SMTP)</label>
       </div>
       <div class="card single-result" id="single-result" hidden aria-live="polite">
         <div class="verdict"><span class="badge big" id="sr-badge"></span></div>
@@ -73,7 +73,7 @@
           <legend>What to check</legend>
           <label class="check"><input type="checkbox" checked disabled> Syntax <small>always on</small></label>
           <label class="check"><input type="checkbox" id="opt-dns" checked> Domain mail records (DNS) <small>finds domains that can't receive mail</small></label>
-          <label class="check" id="smtp-row" hidden><input type="checkbox" id="opt-smtp"> Live mailbox check (SMTP) <small>probes the receiving server</small></label>
+          <label class="check" id="smtp-row" hidden><input type="checkbox" id="opt-smtp" checked> Live mailbox check (SMTP) <small>probes the receiving server</small></label>
           <label class="num">Parallel checks <input type="number" id="opt-conc" min="1" max="25" value="4"></label>
         </fieldset>
 

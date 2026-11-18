@@ -36,13 +36,13 @@ SECURITY_HEADERS = {
 
 class EmailRequest(BaseModel):
     email: str = Field(max_length=320)
-    allow_smtp: bool = False
+    allow_smtp: bool | None = None  # None: use SMTP whenever the server has it enabled
     check_dns: bool = False
 
 
 class SheetRequest(BaseModel):
     url: str = Field(max_length=2000)
-    allow_smtp: bool = False
+    allow_smtp: bool | None = None
     check_dns: bool = False
     concurrency: int = 4
 
@@ -142,7 +142,12 @@ def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, 
     async def health():
         return {'ok': True, 'service': 'local-email-verifier'}
 
+    def smtp_default(allow_smtp):
+        """An unspecified allow_smtp means: check mailboxes whenever this server can."""
+        return service.smtp_enabled if allow_smtp is None else allow_smtp
+
     def submit(content, allow_smtp, concurrency, check_dns, filename):
+        allow_smtp = smtp_default(allow_smtp)
         try:
             job_id = service.submit_csv(
                 content, allow_smtp=allow_smtp, concurrency=concurrency,
@@ -156,7 +161,7 @@ def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, 
 
     @application.post('/v1/verify/csv', status_code=202)
     async def verify_csv(file: Annotated[UploadFile, File()],
-                         allow_smtp: Annotated[bool, Form()] = False,
+                         allow_smtp: Annotated[bool | None, Form()] = None,
                          concurrency: Annotated[int, Form()] = 4,
                          check_dns: Annotated[bool, Form()] = False):
         content = await file.read(MAX_UPLOAD_BYTES + 1)
@@ -166,7 +171,7 @@ def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, 
     async def verify_email(body: EmailRequest):
         """Verify one address immediately; nothing is stored."""
         try:
-            return await service.verify_one(body.email, body.allow_smtp, body.check_dns)
+            return await service.verify_one(body.email, smtp_default(body.allow_smtp), body.check_dns)
         except PermissionError as error:
             raise HTTPException(403, str(error)) from error
         except (ValueError, TypeError) as error:
@@ -174,7 +179,7 @@ def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, 
 
     @application.post('/v1/verify/xlsx', status_code=202)
     async def verify_xlsx(file: Annotated[UploadFile, File()],
-                          allow_smtp: Annotated[bool, Form()] = False,
+                          allow_smtp: Annotated[bool | None, Form()] = None,
                           concurrency: Annotated[int, Form()] = 4,
                           check_dns: Annotated[bool, Form()] = False):
         raw = await file.read(MAX_XLSX_BYTES + 1)
@@ -196,6 +201,7 @@ def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, 
     async def config():
         return {
             'smtp_available': service.smtp_enabled,
+            'smtp_default': service.smtp_enabled,
             'dns_check_available': True,
             'max_emails': MAX_EMAILS,
             'max_csv_bytes': MAX_UPLOAD_BYTES,

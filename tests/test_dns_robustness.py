@@ -134,3 +134,41 @@ async def test_single_email_defaults_to_no_network_and_rejects_bad_input(tmp_pat
         assert (await post_email(client, email='a' * 400 + '@x.test')).status_code == 422
         assert (await post_email(client, email='a@ok.test', allow_smtp=True)).status_code == 403
         assert (await client.post('/v1/verify/email', json={'email': 'a@ok.test'})).status_code == 401
+
+
+# ---- SMTP on by default when the server has it ----
+
+class FakeProbe:
+    def __init__(self):
+        self.checked = []
+
+    async def check(self, email, domain, hosts):
+        from verifier.policy import ProbeVerdict
+        self.checked.append(email)
+        return ProbeVerdict('deliverable_candidate', 'smtp_rcpt_accepted', 250, host='mx.test')
+
+
+async def test_when_smtp_is_enabled_every_check_uses_it_unless_turned_off(tmp_path):
+    probe = FakeProbe()
+    app = create_app(store_path=str(tmp_path / 's.sqlite3'), api_key=KEY, smtp_enabled=True,
+                     verifier=Verifier(DNS(), probe))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+        headers = {'X-API-Key': KEY}
+        config = (await client.get('/v1/config', headers=headers)).json()
+        assert config['smtp_available'] and config['smtp_default']
+        one = (await client.post('/v1/verify/email', headers=headers, json={'email': 'ann@ok.test'})).json()
+        assert one['smtp_checked'] is True and one['reason'] == 'smtp_rcpt_accepted' and probe.checked == ['ann@ok.test']
+        off = (await client.post('/v1/verify/email', headers=headers,
+                                 json={'email': 'bob@ok.test', 'allow_smtp': False})).json()
+        assert off['smtp_checked'] is False and probe.checked == ['ann@ok.test']
+        job = (await client.post('/v1/verify/csv', headers=headers,
+                                 files={'file': ('a.csv', 'email\ncy@ok.test\n', 'text/csv')})).json()
+        assert job['options']['allow_smtp'] is True
+
+
+def test_server_refuses_to_start_with_smtp_enabled_but_no_sender_identity(monkeypatch, tmp_path):
+    monkeypatch.setenv('VERIFIER_SMTP_ENABLED', 'true')
+    monkeypatch.delenv('VERIFIER_HELO_DOMAIN', raising=False)
+    monkeypatch.delenv('VERIFIER_MAIL_FROM', raising=False)
+    with pytest.raises(RuntimeError, match='sender identity'):
+        create_app(store_path=str(tmp_path / 's.sqlite3'), api_key=KEY)

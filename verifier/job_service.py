@@ -26,6 +26,10 @@ class JobService:
             dns = DNSResolver()
             settings = SMTPSettings.from_environment()
             enabled = os.getenv('VERIFIER_SMTP_ENABLED', '').lower() == 'true'
+            if enabled and not settings.ready:
+                raise RuntimeError(
+                    'VERIFIER_SMTP_ENABLED=true needs a real sender identity '
+                    f'(VERIFIER_HELO_DOMAIN and VERIFIER_MAIL_FROM): {settings.reason}')
             smtp = AsyncSMTPProbe(
                 dns, helo_domain=settings.helo_domain, mail_from=settings.mail_from,
             ) if enabled and settings.ready else None
