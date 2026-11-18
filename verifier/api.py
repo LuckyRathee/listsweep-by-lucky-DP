@@ -462,7 +462,8 @@ def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, 
         user_key, ip_key = f'{address}|{email}', f'ip|{address}'
         wait = throttle.blocked_for(user_key, ip_key)
         if wait:
-            record_as(attempted_label(email), 'none', 'auth.login_blocked', request, 'too many failed attempts')
+            if throttle.first_block(ip_key):
+                record_as(attempted_label(email), 'none', 'auth.login_blocked', request, 'too many failed attempts')
             raise HTTPException(429, f'Too many sign-in attempts. Try again in {max(1, wait // 60)} minutes.',
                                 headers={'Retry-After': str(wait)})
         user = service.store.user_by_email(email)

@@ -76,6 +76,7 @@ def test_throttle_locks_after_repeated_failures_and_clears_on_success():
         assert throttle.blocked_for('u', 'ip') == 0
         throttle.record('u', 'ip')
     assert throttle.blocked_for('u', 'ip') > 0
+    assert throttle.first_block('ip') is True and throttle.first_block('ip') is False   # announced once per window
     assert throttle.blocked_for('other', 'ip2') == 0
     throttle.clear('u')
     assert throttle.blocked_for('u', 'ip') == 0

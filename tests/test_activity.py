@@ -81,6 +81,21 @@ async def test_lockout_is_recorded(tmp_path):
     assert stored
 
 
+async def test_hammering_a_locked_out_address_cannot_flood_the_log(tmp_path):
+    app = make_app(tmp_path)
+    async with client_for(app) as stranger:
+        for index in range(60):
+            email = ADMIN if index % 2 else f'guess{index}@example.com'     # varying the email does not help
+            await stranger.post('/v1/auth/login', json={'email': email, 'password': 'Wr0ng!Guess-123'})
+    rows = sqlite3.connect(str(tmp_path / 'a.sqlite3')).execute('SELECT action FROM activity').fetchall()
+    counts = {}
+    for (action,) in rows:
+        counts[action] = counts.get(action, 0) + 1
+    assert counts.get('auth.login_blocked', 0) == 1                # logged once, not once per request
+    assert counts.get('auth.login_failed', 0) <= 30                # bounded by the address limit
+    assert len(rows) <= 40                                         # nothing close to the 5,000 cap
+
+
 async def test_people_and_key_changes_name_who_did_them(tmp_path):
     app = make_app(tmp_path, api_key=SERVER_KEY)
     admin = await admin_session(app)

@@ -54,6 +54,8 @@ Open `http://127.0.0.1:8080/` and sign in. It is laid out like a desktop app: a 
   - **API keys:** create and delete named keys for agents and apps.
   - **Activity:** who signed in (and failed to), who changed people and keys, and which jobs were started, cancelled or re-checked, with filters. Passwords and keys are never recorded, and the newest 5,000 events are kept.
 - **Normal users** can verify and see jobs but can't manage people, keys or the activity log. Everyone shares the same jobs and results.
+- **Forgot the admin password?** There is no reset screen on purpose. Another admin can reset it from the Admin page. If nobody can sign in, set a *different* `EMAIL_VERIFIER_ADMIN_EMAIL` and a password in `.env` and restart: a new admin is created. Then delete the old account from the Admin page.
+- **Lockout is per network address.** Behind an SSH tunnel or Docker, everyone appears as one address, so about 30 wrong passwords in 15 minutes lock sign-in for everybody until the window passes or the server restarts.
 - **Server locked to keys only:** if API keys exist but no accounts do, the page shows a message telling the owner to set the two settings above. API keys for agents and scripts keep working either way.
 
 - **One shared "How thorough" setting** at the top: syntax only, plus domain records (DNS), or plus a mailbox check (SMTP). It starts on the most thorough check the server allows and applies to everything below, including re-checks.

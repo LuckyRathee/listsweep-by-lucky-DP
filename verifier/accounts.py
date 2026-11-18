@@ -87,6 +87,7 @@ class LoginThrottle:
     def __init__(self, limit: int = 5, ip_limit: int = 30, window: float = 900.0):
         self.limit, self.ip_limit, self.window = limit, ip_limit, window
         self._failures: dict[str, deque] = {}
+        self._announced: dict[str, float] = {}
 
     def _recent(self, key: str) -> deque:
         now = time.monotonic()
@@ -104,6 +105,16 @@ class LoginThrottle:
             if len(queue) >= limit:
                 waits.append(int(self.window - (now - queue[0])) + 1)
         return max(waits)
+
+    def first_block(self, ip_key: str) -> bool:
+        """True once per window per address, so a lockout is logged once however hard it is hammered."""
+        now = time.monotonic()
+        if now - self._announced.get(ip_key, -self.window - 1) > self.window:
+            self._announced[ip_key] = now
+            if len(self._announced) > 1000:      # keep the memory bounded
+                self._announced = {k: t for k, t in self._announced.items() if now - t <= self.window}
+            return True
+        return False
 
     def record(self, user_key: str, ip_key: str) -> None:
         now = time.monotonic()

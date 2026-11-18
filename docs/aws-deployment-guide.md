@@ -2,7 +2,7 @@
 
 This supplement covers deploying the conservative email-verification API.
 
-**Status: nothing is deployed to AWS.** This guide describes how to deploy the code in this repository to a single EC2 instance; no instance, security group, or AWS integration exists yet. The application code and its 140 tests pass locally (`pytest`), but the `Dockerfile` and `docker-compose.yml` have **not been built or run** (Docker was not available when they were written), so treat the first `docker compose up --build` as the first real test.
+**Status: nothing is deployed to AWS.** This guide describes how to deploy the code in this repository to a single EC2 instance; no instance, security group, or AWS integration exists yet. The application code and its 169 tests pass locally (`pytest`), but the `Dockerfile` and `docker-compose.yml` have **not been built or run** (Docker was not available when they were written), so treat the first `docker compose up --build` as the first real test.
 
 **Storage is SQLite on a Docker named volume.** PostgreSQL is *not* implemented: `verifier/store.py` uses `sqlite3` only, and there is no `DATABASE_URL` setting. Moving to PostgreSQL is a separate work item (store rewrite, migrations, backup/restore), not a configuration change. Names, ports, and environment variables below match the code as of this revision.
 
