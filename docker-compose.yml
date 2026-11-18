@@ -1,0 +1,19 @@
+# Single-host deployment. The store is SQLite on a named volume (PostgreSQL is not implemented).
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      EMAIL_VERIFIER_ENV: production
+      EMAIL_VERIFIER_API_KEY: ${EMAIL_VERIFIER_API_KEY:?set a random key of 32+ characters in .env}
+      EMAIL_VERIFIER_DB: /data/jobs.sqlite3
+      EMAIL_VERIFIER_RATE_LIMIT_PER_MINUTE: ${EMAIL_VERIFIER_RATE_LIMIT_PER_MINUTE:-120}
+      VERIFIER_SMTP_ENABLED: "false"
+    volumes:
+      - verifier_data:/data
+    ports:
+      # Loopback only; reach it through an SSH tunnel.
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  verifier_data:

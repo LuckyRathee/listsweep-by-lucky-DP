@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lead-email-verifier"
+version = "0.1.0"
+description = "Conservative bulk email verification with transparent uncertainty"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi==0.163.1",
+  "uvicorn[standard]==0.54.0",
+  "email-validator==2.4.0",
+  "dnspython==2.9.2",
+  "SQLAlchemy==2.1.9",
+  "aiosqlite==0.22.1",
+  "httpx==0.28.1",
+  "python-multipart==0.0.34",
+  "mcp==1.30.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.2.0", "pytest-asyncio==1.5.0", "ruff==0.17.5", "aiosmtpd==1.4.6"]
+
+[tool.setuptools.packages.find]
+include = ["verifier*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["error"]
+
+[tool.ruff]
+line-length = 100

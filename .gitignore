@@ -1,0 +1,15 @@
+*.egg-info/
+../lead-email-verifier-venv
+.DS_Store
+.coverage
+.env
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+coverage.xml
+data/*.sqlite3
+data/*.sqlite3-*
+data/jobs.sqlite3
+data/jobs.sqlite3-*
+exports/

@@ -1,0 +1,12 @@
+.git
+.venv
+.env
+data
+exports
+tests
+docs
+debug_connector.py
+__pycache__
+.pytest_cache
+.ruff_cache
+uv.lock
