@@ -208,3 +208,7 @@ The suite uses fake DNS and a local SMTP fixture, so no real addresses are probe
 - [x] Sign-in, an Account page, and an Admin page for people, API keys and activity
 - [ ] Webhooks when a job finishes, per-person job privacy, and single sign-on
 - [ ] PostgreSQL storage
+
+## Licence
+
+Released under the [MIT License](LICENSE).
