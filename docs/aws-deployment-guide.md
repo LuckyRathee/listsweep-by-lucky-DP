@@ -13,7 +13,7 @@ This supplement covers deploying the conservative email-verification API.
 - **Access:** AWS Session Manager only. There is no SSH key pair, and the SSH service is switched off. The instance role has only `AmazonSSMManagedInstanceCore`.
 - **Secrets:** the first admin's settings were stored as a temporary encrypted SSM parameter, read once by the server into a root-only `.env` (mode 600), and then the parameter and the extra permission that allowed the read were deleted.
 - **Code:** cloned from the public repository into `/opt/email-verifier`. Updates are manual; there is no auto-update.
-- **Backups:** a Data Lifecycle Manager policy takes a daily snapshot of the tagged disk (21:00 UTC) and keeps 7. A restore has not been tried.
+- **Backups:** a Data Lifecycle Manager policy takes a daily snapshot of the tagged disk (21:00 UTC) and keeps 7. It is configured and enabled, but the first snapshot had not run when this was written, and a restore has not been tried.
 - **Mailbox checks:** off (`VERIFIER_SMTP_ENABLED` unset). The app offers syntax and domain checks only, and nothing is send-eligible.
 - **Cost:** about $14 a month: instance $8.20, disk $1.80, public IPv4 address $3.65, snapshots under $1 (Mumbai prices at deployment time).
 
@@ -29,7 +29,7 @@ aws ssm start-session --region ap-south-1 --target <instance-id> \
   --parameters '{"portNumber":["8080"],"localPortNumber":["18080"]}'
 ```
 
-Leave it running and open `http://127.0.0.1:18080/`. Stop the tunnel with Ctrl-C.
+Leave it running and open `http://localhost:18080/`. Use the name `localhost` here, not `127.0.0.1`: browsers share cookies across ports on the same host name, so if you also run ListSweep on your own computer at `http://127.0.0.1:8080/`, signing in to one would sign you out of the other. Stop the tunnel with Ctrl-C.
 
 **Open a shell on the server:** `aws ssm start-session --region ap-south-1 --target <instance-id>`.
 
@@ -70,8 +70,16 @@ aws iam list-attached-role-policies --role-name AWSDataLifecycleManagerDefaultRo
 
 1. **Ask AWS to lift the port-25 block.** Submit AWS's "Request to remove email sending limitations" form (linked from the AWS article in the sources, reference [4]). Give the Elastic IP address as the address to un-throttle, and the same hostname as the reverse DNS name (step 3). Suggested use case: *"We verify that recipient mailboxes exist before contacting business leads. The server opens an SMTP connection to the recipient's mail server, issues MAIL FROM and RCPT TO, and disconnects without sending a message. It limits itself to a few connections per mail server, identifies itself with a real hostname and an SPF-protected domain, and never sends mail. Abuse reports go to <your address>."* Approval can take a day or more and is not guaranteed for new accounts.
 2. **Create DNS records for a dedicated probe name.** Pick a subdomain you control, for example `probe.example.com`: an `A` record pointing to the server's Elastic IP, and a `TXT` record `v=spf1 -all` on that name. The app requires the sender address and the HELO name to be on the same domain, so use `probe@probe.example.com`. Do not reuse a domain you send real email from.
-3. **Request reverse DNS (PTR) for the Elastic IP** to point at that same name, using the same AWS form. A matching forward and reverse name makes remote servers much more willing to answer.
-4. **Then** set the three lines in `.env` as shown above.
+3. **Set reverse DNS (PTR) for the Elastic IP** to that same name, once the `A` record from step 2 exists. Try it yourself first: `aws ec2 modify-address-attribute --region ap-south-1 --allocation-id <eipalloc-id> --domain-name probe.example.com`. If AWS refuses, include it in the form from step 1. A matching forward and reverse name makes remote servers much more willing to answer.
+4. **Open outbound port 25 on the firewall, after AWS approves.** It is closed on purpose, and approval alone is not enough because the security group would still block it:
+
+   ```sh
+   aws ec2 authorize-security-group-egress --region ap-south-1 --group-id <sg-id> \
+     --ip-permissions 'IpProtocol=tcp,FromPort=25,ToPort=25,IpRanges=[{CidrIp=0.0.0.0/0,Description=mailbox checks}]'
+   ```
+
+   To close it again, run the same command as `revoke-security-group-egress`.
+5. **Then** set the three lines in `.env` as shown above and run `sudo docker compose up -d`.
 
 Even then, large providers (Microsoft 365 in particular) often refuse unfamiliar senders, so expect `unknown` results for some addresses.
 
@@ -161,14 +169,14 @@ This verifier does **not** require SES and should not send mail. If a separately
 
 **Release gate** (status after the first deployment):
 
-- [x] No inbound path from the internet: the security group has zero inbound rules, the SSH service is off, and `ss -ltnp` on the server shows only `127.0.0.1:8080` plus local DNS. Outbound TCP/25 is not allowed.
+- [x] No inbound path from the internet: the security group has zero inbound rules, the SSH service is disabled (and stays off after a reboot), and `ss -ltnp` on the server shows only `127.0.0.1:8080` plus local DNS. Outbound TCP/25 is not allowed.
 - [x] `docker compose up --build` succeeded on arm64 and `docker compose ps` reports healthy; the container runs as a non-root user and owns its data volume.
 - [x] On the server: `/healthz` is ok, the sign-in page is served, requests without sign-in get 401, a wrong password gets 401, and the admin account signs in and out.
 - [x] Domain checks work against the real resolver: a real domain returns `unknown / mailbox_check_disabled` with its mail servers, and a non-existent domain returns `undeliverable / domain_not_found`.
 - [x] A reboot brings the app back by itself (Docker enabled at boot, `restart: unless-stopped`) and sign-in still works, so the data volume persisted.
 - [x] Mailbox checks are off, so no address can be `send_eligible` (the `/v1/config` response reports `smtp_available: false`).
 - [ ] The page loads through the Session Manager tunnel from a Mac and a CSV job completes end to end (needs the plugin on the Mac).
-- [ ] A backup snapshot restored into an isolated instance and a job read back.
+- [ ] The first daily snapshot exists, and one is restored into an isolated instance with a job read back (the policy is enabled; no snapshot had run yet).
 - [ ] A restart in the middle of a job resumes it and loses no saved results (covered by a local test, not tried here).
 - [ ] A null-MX domain and a DNS timeout against the real resolver (covered by fixture tests).
 - [ ] Anything that uses SMTP: blocked until AWS lifts the port-25 block.
