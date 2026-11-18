@@ -103,6 +103,20 @@ class Store:
         )
         return item
 
+    def list_jobs(self, limit=50):
+        """Newest jobs first, without per-address rows."""
+        with self._connect() as db:
+            rows = db.execute('SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?', (limit,)).fetchall()
+            jobs = []
+            for row in rows:
+                item = dict(row)
+                item['options'] = json.loads(item['options'])
+                item['counts'] = dict(db.execute(
+                    'SELECT status, COUNT(*) FROM results WHERE job_id=? GROUP BY status',
+                    (item['id'],)).fetchall())
+                jobs.append(item)
+            return jobs
+
     def incomplete(self):
         """Return interrupted and not-yet-finished jobs with their saved options."""
         with self._connect() as db:

@@ -37,6 +37,17 @@ Most verifiers hand you a green tick and hope. This one doesn't. It sorts every 
 - **Locked-down API.** API key required in production (32+ characters), constant-time comparison, per-key rate limit.
 - **Bounded jobs.** Up to 2,000 unique addresses and 1.5 MB per upload, with duplicates removed.
 
+## Web interface
+
+Open `http://127.0.0.1:8080/` and enter your API key. From the page you can:
+
+- **Upload** a `.csv` or `.xlsx` file, or paste a link to a **Google Sheet** shared as "Anyone with the link can view".
+- Choose what to check: syntax (always), **domain mail records (DNS)**, and live SMTP checks if the server allows them.
+- Watch progress, then filter and search the results, and download everything or only the send-eligible rows.
+- Reopen earlier jobs from the **Jobs** tab, and copy ready-made `curl` and Python examples from the **API** tab.
+
+The page itself carries no data and is the only thing served without a key. The key is held in the browser tab's session storage, sent only as a header, and never put in a URL. Results are rendered as plain text and the page runs under a strict Content-Security-Policy with no external assets.
+
 ## Quick start
 
 Requires Python 3.11+.
@@ -53,12 +64,14 @@ With no key configured it runs open on localhost, which is fine for trying it ou
 curl http://127.0.0.1:8080/healthz
 ```
 
-### Verify a CSV
+### Verify a file
 
-The file needs an `email` column (also `emails`, `email address`, `e-mail`). UTF-8 only. Other columns are kept and come back as `lead_*` columns in exports.
+The file needs an `email` column (also `emails`, `email address`, `e-mail`). CSV must be UTF-8. Excel means `.xlsx` (the first sheet; legacy `.xls` is not supported). Other columns are kept and come back as `lead_*` columns in exports.
+
+Add `-F check_dns=true` to look up each domain's mail records. Without it, a job is syntax-only.
 
 ```sh
-curl -H "X-API-Key: $KEY" -F file=@leads.csv http://127.0.0.1:8080/v1/verify/csv
+curl -H "X-API-Key: $KEY" -F file=@leads.csv -F check_dns=true http://127.0.0.1:8080/v1/verify/csv
 # -> 202 {"job_id": "...", "status": "queued", ...}
 
 curl -H "X-API-Key: $KEY" http://127.0.0.1:8080/v1/jobs/$JOB_ID
@@ -73,7 +86,12 @@ Authenticate with `X-API-Key: <key>` **or** `Authorization: Bearer <key>`.
 | Route | What it does |
 | --- | --- |
 | `GET /healthz` | Liveness, no auth |
-| `POST /v1/verify/csv` | Upload a CSV (`file`, optional `allow_smtp`, `concurrency` 1-25); returns 202 and a `job_id` |
+| `GET /` and `/ui/*` | The web interface, no key needed |
+| `GET /v1/config` | Limits, and whether DNS and SMTP checks are available |
+| `POST /v1/verify/csv` | Upload a CSV (`file`, optional `check_dns`, `allow_smtp`, `concurrency` 1-25); returns 202 and a `job_id` |
+| `POST /v1/verify/xlsx` | Same, for an Excel `.xlsx` file |
+| `POST /v1/verify/sheet` | JSON `{"url": "...", "check_dns": true}` for a publicly shared Google Sheet |
+| `GET /v1/jobs` | Recent jobs, newest first |
 | `GET /v1/jobs/{id}` | Status, progress and counts |
 | `GET /v1/jobs/{id}/results` | Results as JSON (`send_only`, `offset`, `limit`) |
 | `GET /v1/jobs/{id}/results.csv` | Results as CSV (`send_only`) |
@@ -82,7 +100,7 @@ Jobs are stored in SQLite and resume after a restart.
 
 ## Use it from Claude (MCP)
 
-A local stdio MCP server exposes the same engine as tools: `verify_emails`, `verify_csv`, `get_verification_job`, `get_verification_results`, `export_verification_csv`, `record_hard_bounce` and `get_suppression`.
+The MCP server is separate from the web page. A local stdio MCP server exposes the same engine as tools: `verify_emails`, `verify_csv`, `get_verification_job`, `get_verification_results`, `export_verification_csv`, `record_hard_bounce` and `get_suppression`.
 
 ```sh
 python -m verifier.mcp_connector
@@ -126,14 +144,17 @@ The suite uses fake DNS and a local SMTP fixture, so no real addresses are probe
 
 - **Tested locally; not yet deployed.** The Docker files haven't been built or run.
 - **SQLite only.** PostgreSQL is not implemented.
-- **With SMTP off, jobs are syntax-only.** Every valid address comes back `unknown`. An opt-in DNS-only mode is planned.
-- **CSV only for now.**
+- **With SMTP off, no address can be confirmed.** Valid-looking addresses come back `unknown`. Turn on `check_dns` to also catch null-MX and non-existent domains; DNS alone never makes an address `send_eligible`.
+- **Google Sheets must be publicly shared** ("Anyone with the link"). The server needs outbound HTTPS to `docs.google.com`. Private sheets are not supported; export them to CSV or Excel.
+- **Excel:** first sheet only, up to 5 MB and 20,000 rows scanned.
 - **Rate limiting is in-process**, so run one worker.
 - **Not a licence to send.** `send_eligible` is a filter, not consent. You are responsible for lawful outreach.
 
 ## Roadmap
 
-- [ ] Opt-in DNS-only checks (MX, null-MX, bad domain) without SMTP
-- [ ] Web UI: drag-and-drop upload, live progress, results table, downloads
-- [ ] Excel (`.xlsx`) and Google Sheets (link) import
-- [ ] Job history and an API tab with ready-to-copy examples
+- [x] Opt-in DNS-only checks (MX, null-MX, bad domain) without SMTP
+- [x] Web UI: upload, live progress, results table, downloads, job history, API tab
+- [x] Excel (`.xlsx`) and Google Sheets (public link) import
+- [ ] Private Google Sheets via Google sign-in
+- [ ] Multiple API keys, and webhooks when a job finishes
+- [ ] PostgreSQL storage

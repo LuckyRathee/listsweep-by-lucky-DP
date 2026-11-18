@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lead Email Verifier</title>
+  <link rel="stylesheet" href="/ui/style.css">
+  <script src="/ui/app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><svg class="mark" viewBox="0 0 22 22" aria-hidden="true"><rect width="22" height="22" rx="5" fill="#141414"/><path d="M6 11.5l3.2 3.2L16 8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Lead Email Verifier</span></div>
+    <form class="keybox" id="key-form" autocomplete="off">
+      <label for="api-key" class="sr">API key</label>
+      <input id="api-key" type="password" placeholder="API key" autocomplete="off" spellcheck="false">
+      <button type="submit" class="btn small">Connect</button>
+      <span id="conn" class="pill" role="status">Not connected</span>
+    </form>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button role="tab" id="tab-verify" aria-controls="panel-verify" aria-selected="true">Verify</button>
+    <button role="tab" id="tab-jobs" aria-controls="panel-jobs" aria-selected="false">Jobs</button>
+    <button role="tab" id="tab-api" aria-controls="panel-api" aria-selected="false">API</button>
+  </nav>
+
+  <main>
+    <div id="notice" class="notice" role="alert" hidden></div>
+
+    <section id="panel-verify" role="tabpanel" aria-labelledby="tab-verify">
+      <div class="card">
+        <h2>Check a list</h2>
+        <div class="seg" role="group" aria-label="Source">
+          <button type="button" id="src-file" class="on" aria-pressed="true">CSV or Excel file</button>
+          <button type="button" id="src-sheet" aria-pressed="false">Google Sheet link</button>
+        </div>
+
+        <div id="file-source">
+          <label class="drop" id="drop" for="file">
+            <input id="file" type="file" accept=".csv,.xlsx">
+            <strong id="drop-title">Drop a file here or click to choose</strong>
+            <span id="drop-sub">.csv or .xlsx with an <code>email</code> column. Up to 2,000 unique addresses.</span>
+          </label>
+        </div>
+
+        <div id="sheet-source" hidden>
+          <label for="sheet-url">Link to a sheet shared as "Anyone with the link can view"</label>
+          <input id="sheet-url" type="url" inputmode="url" placeholder="https://docs.google.com/spreadsheets/d/..." spellcheck="false">
+          <p class="hint">Private sheets can't be read. Download them as CSV or Excel and upload the file instead.</p>
+        </div>
+
+        <fieldset class="opts">
+          <legend>What to check</legend>
+          <label class="check"><input type="checkbox" checked disabled> Syntax <small>always on</small></label>
+          <label class="check"><input type="checkbox" id="opt-dns" checked> Domain mail records (DNS) <small>finds domains that can't receive mail</small></label>
+          <label class="check" id="smtp-row" hidden><input type="checkbox" id="opt-smtp"> Live mailbox check (SMTP) <small>probes the receiving server</small></label>
+          <label class="num">Parallel checks <input type="number" id="opt-conc" min="1" max="25" value="4"></label>
+        </fieldset>
+
+        <p id="smtp-off" class="hint" hidden>Live mailbox checks are switched off on this server, so no address can be confirmed as a deliverable candidate. Results will be <em>undeliverable</em> or <em>unknown</em>.</p>
+
+        <button class="btn primary" id="start" type="button" disabled>Start verification</button>
+      </div>
+
+      <div class="card" id="progress-card" hidden>
+        <h2 id="progress-title">Verifying</h2>
+        <progress id="progress" max="100" value="0"></progress>
+        <p id="progress-text" class="hint"></p>
+      </div>
+
+      <div id="results" hidden>
+        <div class="tiles" id="tiles"></div>
+        <p class="note">A <em>deliverable candidate</em> is evidence, not proof, and <em>unknown</em> is never treated as valid. <code>send_eligible</code> is a filter, not consent to send, and there is no zero-bounce guarantee.</p>
+        <div class="card">
+          <div class="toolbar">
+            <div class="chips" id="chips" role="group" aria-label="Filter by status"></div>
+            <input id="search" type="search" placeholder="Search email or reason" aria-label="Search results">
+            <span class="grow"></span>
+            <button class="btn" id="dl-all" type="button">Download all</button>
+            <button class="btn" id="dl-send" type="button">Download send-eligible</button>
+          </div>
+          <div class="scroll">
+            <table id="table">
+              <thead><tr><th>Email</th><th>Status</th><th>Reason</th><th>Flags</th><th>Send</th></tr></thead>
+              <tbody id="rows"></tbody>
+            </table>
+          </div>
+          <div class="pager">
+            <button class="btn small" id="prev" type="button">Previous</button>
+            <span id="page-info"></span>
+            <button class="btn small" id="next" type="button">Next</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="panel-jobs" role="tabpanel" aria-labelledby="tab-jobs" hidden>
+      <div class="card">
+        <div class="toolbar"><h2>Recent jobs</h2><span class="grow"></span><button class="btn small" id="refresh-jobs" type="button">Refresh</button></div>
+        <div class="scroll">
+          <table>
+            <thead><tr><th>Started</th><th>Source</th><th>Status</th><th>Total</th><th>Summary</th><th></th></tr></thead>
+            <tbody id="job-rows"></tbody>
+          </table>
+        </div>
+        <p id="no-jobs" class="hint" hidden>No jobs yet.</p>
+      </div>
+    </section>
+
+    <section id="panel-api" role="tabpanel" aria-labelledby="tab-api" hidden>
+      <div class="card">
+        <h2>Use the API</h2>
+        <p>Base URL: <code id="base-url"></code></p>
+        <p class="hint">Send your key as <code>X-API-Key: &lt;key&gt;</code> or <code>Authorization: Bearer &lt;key&gt;</code>. Replace <code>YOUR_KEY</code> below. The key typed above is never written into these examples.</p>
+        <div id="examples"></div>
+      </div>
+      <div class="card">
+        <h2>Routes</h2>
+        <div class="scroll"><table><thead><tr><th>Route</th><th>Purpose</th></tr></thead><tbody id="route-rows"></tbody></table></div>
+      </div>
+    </section>
+  </main>
+
+  <footer>Never sends email. Results describe what a check observed, not a guarantee.</footer>
+</body>
+</html>

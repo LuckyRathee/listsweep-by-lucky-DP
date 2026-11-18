@@ -71,17 +71,24 @@ class JobService:
         if allow_smtp and not self.smtp_enabled:
             raise PermissionError('SMTP is disabled; set VERIFIER_SMTP_ENABLED=true and configure VERIFIER_HELO_DOMAIN and VERIFIER_MAIL_FROM')
 
-    def submit_emails(self, emails, allow_smtp=False, concurrency=4):
+    @staticmethod
+    def _check_dns_flag(check_dns):
+        if type(check_dns) is not bool:
+            raise TypeError('check_dns must be true or false')
+
+    def submit_emails(self, emails, allow_smtp=False, concurrency=4, check_dns=False):
         rows, duplicates = self.dedupe(emails)
         self._check_concurrency(concurrency)
+        self._check_dns_flag(check_dns)
         self.require_smtp_if_requested(allow_smtp)
         job_id = self.store.create_job(rows, duplicates, {
-            'allow_smtp': allow_smtp, 'concurrency': concurrency,
+            'allow_smtp': allow_smtp, 'concurrency': concurrency, 'check_dns': check_dns,
         })
         self.schedule(job_id)
         return job_id
 
-    def submit_csv(self, content, allow_smtp=False, concurrency=4, filename='agent.csv'):
+    def submit_csv(self, content, allow_smtp=False, concurrency=4, filename='agent.csv',
+                   check_dns=False):
         if not isinstance(content, bytes) or not content:
             raise ValueError('CSV input is required')
         if len(content) > 1_500_000:
@@ -90,9 +97,11 @@ class JobService:
         if error:
             raise ValueError(error)
         self._check_concurrency(concurrency)
+        self._check_dns_flag(check_dns)
         self.require_smtp_if_requested(allow_smtp)
         job_id = self.store.create_job(rows, duplicates, {
             'allow_smtp': allow_smtp, 'concurrency': concurrency, 'filename': filename,
+            'check_dns': check_dns,
         })
         self.schedule(job_id)
         return job_id
@@ -127,6 +136,9 @@ class JobService:
                             'normalized_email': normalized, 'domain': normalized.rsplit('@', 1)[1],
                             'status': 'undeliverable', 'reason': 'suppressed_prior_bounce',
                         }
+                    elif not options['allow_smtp'] and options.get('check_dns'):
+                        # DNS evidence only (MX, null MX, NXDOMAIN); never a mailbox claim.
+                        result = await self.verifier.verify(normalized, allow_smtp=False)
                     elif not options['allow_smtp']:
                         result = {
                             'normalized_email': normalized, 'domain': normalized.rsplit('@', 1)[1],
