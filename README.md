@@ -146,7 +146,7 @@ The MCP server is a local process the agent starts itself, so nothing goes over 
     "listsweep": {
       "command": "/path/to/venv/bin/python",
       "args": ["-m", "verifier.mcp_connector"],
-      "env": { "PYTHONPATH": "/path/to/lead-email-verifier", "VERIFIER_DB": "/path/to/lead-email-verifier/data/jobs.sqlite3" }
+      "env": { "PYTHONPATH": "/path/to/listsweep-by-lucky-DP", "VERIFIER_DB": "/path/to/listsweep-by-lucky-DP/data/jobs.sqlite3" }
     }
   }
 }
