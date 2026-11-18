@@ -1,0 +1,14 @@
+# HTTPS in front of the app. Used only when COMPOSE_PROFILES=https is set in .env.
+# VERIFIER_HTTPS_HOST is the address people type: a domain name, or the server's IP address.
+# "tls internal" makes Caddy issue a certificate from its own local authority. Browsers warn about it
+# until you trust that authority's root certificate; for a real domain, delete that line to get a
+# trusted certificate from Let's Encrypt (this needs port 80 reachable from the internet).
+{
+	default_sni {$VERIFIER_HTTPS_HOST}
+	auto_https disable_redirects
+}
+
+https://{$VERIFIER_HTTPS_HOST} {
+	tls internal
+	reverse_proxy api:8080
+}

@@ -14,11 +14,32 @@ services:
       VERIFIER_SMTP_ENABLED: ${VERIFIER_SMTP_ENABLED:-false}
       VERIFIER_HELO_DOMAIN: ${VERIFIER_HELO_DOMAIN:-}
       VERIFIER_MAIL_FROM: ${VERIFIER_MAIL_FROM:-}
+      # Which proxy addresses may report the visitor's real IP. Set to * in .env only when the app is reachable
+      # solely through the HTTPS proxy below (so the sign-in throttle and activity log see the real address).
+      FORWARDED_ALLOW_IPS: ${VERIFIER_TRUSTED_PROXY:-127.0.0.1}
     volumes:
       - verifier_data:/data
     ports:
       # Loopback only by default. Set VERIFIER_BIND=0.0.0.0 in .env only when a firewall limits who can reach port 8080.
       - "${VERIFIER_BIND:-127.0.0.1}:8080:8080"
 
+  # Optional HTTPS front door: set COMPOSE_PROFILES=https and VERIFIER_HTTPS_HOST in .env to start it.
+  caddy:
+    image: caddy:2
+    profiles: ["https"]
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      VERIFIER_HTTPS_HOST: ${VERIFIER_HTTPS_HOST:-localhost}
+    ports:
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   verifier_data:
+  caddy_data:
+  caddy_config:
