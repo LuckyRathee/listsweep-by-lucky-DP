@@ -305,3 +305,15 @@ async def test_interface_has_the_depth_control_cancel_and_accessible_tabs(tmp_pa
         assert html.count('role="tab"') == 3 and 'tabindex="-1"' in html
         assert 'ListSweep' in html and 'by DigitalPatron' in html
         assert 'disabled' not in html  # no pre-disabled buttons; the script explains what is missing
+
+
+async def test_the_new_key_box_has_copy_download_and_done_and_never_hides_on_its_own(tmp_path):
+    from pathlib import Path
+    async with client_for(make_app(tmp_path)) as client:
+        html = (await client.get('/')).text
+        for marker in ('id="key-copy"', 'id="key-download"', 'id="key-done"', 'id="key-reveal"'):
+            assert marker in html
+    source = (Path(__file__).resolve().parents[1] / 'verifier' / 'ui' / 'app.js').read_text()
+    assert 'execCommand' in source and 'beforeunload' in source      # copy fallback and the leave warning
+    # the reveal box is hidden only by Done or by deleting a key, never by copying or switching tabs
+    assert source.count("$('key-reveal').hidden = true") == 1       # inside hideReveal()

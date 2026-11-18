@@ -759,10 +759,32 @@ async function loadJobs() {
 }
 
 /* ---------- API and agents ---------- */
+// Copy with a fallback: the async clipboard API can be blocked (permissions, non-secure address),
+// so fall back to selecting the text and using the older copy command.
+async function copyText(text, field) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch { /* fall through */ }
+  let temp = null;
+  try {
+    const source = field || (temp = el('textarea', { readonly: '', 'aria-hidden': 'true', tabindex: '-1' }));
+    if (temp) { temp.value = text; document.body.append(temp); }
+    source.focus();
+    source.select();
+    const ok = document.execCommand('copy');
+    if (temp) temp.remove();
+    return ok;
+  } catch {
+    if (temp) temp.remove();
+    return false;
+  }
+}
+
 function copyButton(getText, label = 'Copy') {
   const button = el('button', { type: 'button', class: 'btn small', text: label });
   button.addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(getText()); button.textContent = 'Copied'; } catch { button.textContent = 'Copy failed'; }
+    button.textContent = (await copyText(getText())) ? 'Copied' : 'Copy failed';
     setTimeout(() => { button.textContent = label; }, 1500);
   });
   return button;
@@ -821,7 +843,9 @@ async function createKey(event) {
   try {
     const created = await postJson('/v1/keys', { name });
     $('key-new').value = created.key;
+    $('key-new').dataset.name = created.name;
     $('key-reveal').hidden = false;
+    $('key-reveal').scrollIntoView({ block: 'nearest' });
     $('key-note').textContent = wasOpen
       ? 'Authentication is now on, because a key exists. This browser is signed in with this key. Anything that used ListSweep without a key will now need one.'
       : 'Store it somewhere safe. ListSweep keeps only a fingerprint of it, so it cannot be shown again.';
@@ -839,13 +863,18 @@ async function createKey(event) {
 async function deleteKey(key, wasThisBrowser) {
   try {
     await api(`/v1/keys/${encodeURIComponent(key.id)}`, { method: 'DELETE' });
-    $('key-reveal').hidden = true;
+    hideReveal();
     if (wasThisBrowser) { setKey(''); await loadConfig(); }
     notice(`Deleted "${key.name}". It stopped working immediately.`, 'info');
     await loadKeys();
   } catch (error) {
     notice(error.message);
   }
+}
+
+function hideReveal() {
+  $('key-reveal').hidden = true;
+  $('key-new').value = '';
 }
 
 function renderHttpConnect() {
@@ -958,8 +987,21 @@ function init() {
   $('refresh-jobs').addEventListener('click', loadJobs);
   $('key-create').addEventListener('submit', createKey);
   $('key-copy').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText($('key-new').value); $('key-copy').textContent = 'Copied'; } catch { $('key-copy').textContent = 'Copy failed'; }
-    setTimeout(() => { $('key-copy').textContent = 'Copy'; }, 1500);
+    const copied = await copyText($('key-new').value, $('key-new'));
+    $('key-copy').textContent = copied ? 'Copied' : 'Press Ctrl+C';
+    if (!copied) { $('key-new').focus(); $('key-new').select(); }   // leave it selected for a manual copy
+    setTimeout(() => { $('key-copy').textContent = 'Copy'; }, 2500);
+  });
+  $('key-download').addEventListener('click', () => {
+    const name = ($('key-new').dataset.name || 'api-key').replace(/[^A-Za-z0-9._-]+/g, '-');
+    const url = URL.createObjectURL(new Blob([`${$('key-new').value}\n`], { type: 'text/plain' }));
+    const link = el('a', { href: url, download: `listsweep-${name}.txt` });
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  });
+  $('key-done').addEventListener('click', () => hideReveal());
+  window.addEventListener('beforeunload', (event) => {
+    if (!$('key-reveal').hidden) { event.preventDefault(); event.returnValue = ''; }   // the key cannot be shown again
   });
   $('key-form').addEventListener('submit', async (event) => {
     event.preventDefault();
