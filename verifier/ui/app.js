@@ -95,7 +95,11 @@ const state = {
   job: null, jobId: null, rows: [], leads: [], filter: 'all', query: '', group: null,
   sort: { key: 'status', dir: 'asc' }, page: 0, expanded: new Set(), pollTimer: null,
   auth: { mode: 'open', user: null, csrf: '', role: null },
+  publicUrl: '',
 };
+
+// The address shown in the API guides: the configured public address, else whatever this page was opened at.
+function baseUrl() { return state.publicUrl || location.origin; }
 
 /* ---------- helpers ---------- */
 let busyCount = 0;
@@ -888,14 +892,14 @@ function hideReveal() {
 }
 
 function renderHttpConnect() {
-  const base = location.origin;
+  const base = baseUrl();
+  const local = base.includes('127.0.0.1') || base.includes('localhost');
   $('how-http').replaceChildren(
-    el('li', { text: 'Create a key above and copy it. Make one per agent.' }),
-    el('li', {}, [document.createTextNode('Point the agent at this address: '), el('code', { text: base }),
-      document.createTextNode(base.includes('127.0.0.1') || base.includes('localhost') ? '. That only works on this computer. For another computer, run ListSweep on a server (see the deployment guide) and use its address.' : '.')]),
-    el('li', {}, [document.createTextNode('Have it send the key in a header on every request: '), el('code', { text: 'X-API-Key: YOUR_KEY' }),
-      document.createTextNode(' (or '), el('code', { text: 'Authorization: Bearer YOUR_KEY' }), document.createTextNode(').')]),
-    el('li', { text: 'Give it the instructions below, or the examples further down.' }),
+    el('li', { text: 'Create a key on the Admin page and copy it. Make one per agent.' }),
+    el('li', {}, [document.createTextNode('Send requests to '), el('code', { text: base }),
+      document.createTextNode(local ? ', which only works on this computer. Use the server\'s public address from other computers.' : '.')]),
+    el('li', {}, [document.createTextNode('Add the header '), el('code', { text: 'X-API-Key: YOUR_KEY' }),
+      document.createTextNode(' to every request, or paste the instructions below into your agent.')]),
   );
   const text = [
     'You can verify email addresses with ListSweep.',
@@ -921,11 +925,9 @@ async function loadMcpConfig() {
     const envFlags = Object.entries(cfg.env).map(([k, v]) => `-e ${shellQuote(`${k}=${v}`)}`).join(' ');
     const command = `claude mcp add listsweep ${envFlags} -- ${shellQuote(cfg.command)} ${cfg.args.join(' ')}`;
     $('how-mcp').replaceChildren(
-      el('li', { text: 'Run your agent on the same computer as ListSweep. The paths below come from the computer running this server.' }),
-      el('li', { text: "Add the settings below to your agent's MCP configuration. For Claude Desktop that is the claude_desktop_config.json file; for Claude Code, run the command instead." }),
-      el('li', { text: 'Restart the agent. It should now list tools such as verify_emails.' }),
-      el('li', { text: 'No key is needed: the agent starts ListSweep as its own local process. Never expose it to a network. Use HTTP with a key for that.' }),
-      el('li', { text: 'The database path in the settings makes jobs your agent runs appear in the Jobs tab here.' }),
+      el('li', { text: 'Use this only when your agent runs on the same computer as this server. Otherwise use Option A.' }),
+      el('li', { text: 'Paste the settings below into the agent\'s MCP configuration (Claude Desktop: claude_desktop_config.json), or run the command for Claude Code.' }),
+      el('li', { text: 'Restart the agent. It should list tools such as verify_emails. No key is needed.' }),
     );
     $('mcp-blocks').replaceChildren(codeBlock('MCP settings (JSON)', json), codeBlock('Or add it to Claude Code', command));
     $('mcp-tools').replaceChildren(...cfg.tools.map((tool) => el('tr', {}, [el('td', {}, el('code', { text: tool.name })), el('td', { text: tool.description })])));
@@ -939,8 +941,8 @@ async function loadMcpConfig() {
 }
 
 function buildApiTab() {
-  $('base-url').textContent = location.origin;
-  const base = location.origin;
+  const base = baseUrl();
+  $('base-url').textContent = base;
   const examples = [
     ['Check one address', `curl -H "X-API-Key: YOUR_KEY" -H "Content-Type: application/json" \\\n  -d '{"email": "name@company.com", "check_dns": true, "allow_smtp": true}' \\\n  ${base}/v1/verify/email`],
     ['Check a CSV file', `curl -H "X-API-Key: YOUR_KEY" \\\n  -F file=@leads.csv -F check_dns=true \\\n  ${base}/v1/verify/csv`],
@@ -1038,6 +1040,8 @@ async function startup() {
     notice('Could not reach the server.');
     return;
   }
+  state.publicUrl = status.public_url || '';
+  buildApiTab();
   state.auth.mode = status.login_required ? 'login' : (status.key_required ? 'keys' : 'open');
   if (state.auth.mode === 'keys') { showLocked(); return; }
   if (state.auth.mode === 'login') {

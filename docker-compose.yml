@@ -9,6 +9,8 @@ services:
       EMAIL_VERIFIER_ADMIN_PASSWORD: ${EMAIL_VERIFIER_ADMIN_PASSWORD:?set the first admin's password in .env}
       EMAIL_VERIFIER_API_KEY: ${EMAIL_VERIFIER_API_KEY:-}
       EMAIL_VERIFIER_DB: /data/jobs.sqlite3
+      # The address shown in the API guides, for example https://listsweep.example.com
+      EMAIL_VERIFIER_PUBLIC_URL: ${VERIFIER_PUBLIC_URL:-}
       EMAIL_VERIFIER_RATE_LIMIT_PER_MINUTE: ${EMAIL_VERIFIER_RATE_LIMIT_PER_MINUTE:-120}
       # Mailbox (SMTP) checks stay off until you set these in .env (and AWS has lifted its port-25 block).
       VERIFIER_SMTP_ENABLED: ${VERIFIER_SMTP_ENABLED:-false}

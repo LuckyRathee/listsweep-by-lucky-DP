@@ -14,6 +14,7 @@ import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -136,6 +137,13 @@ class RateLimiter:
             self._window, self._counts = window, {}
         self._counts[identity] = self._counts.get(identity, 0) + 1
         return self._counts[identity] <= self.per_minute
+
+
+def public_url():
+    """The address people reach this server at, shown in the API guides. Empty unless configured and well formed."""
+    value = (os.getenv('EMAIL_VERIFIER_PUBLIC_URL') or '').strip().rstrip('/')
+    parts = urlsplit(value)
+    return value if parts.scheme in ('http', 'https') and parts.netloc and not (parts.path or parts.query or parts.fragment) else ''
 
 
 def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, rate_limit=None,
@@ -453,7 +461,8 @@ def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, 
     async def auth_status():
         users = users_exist()
         return {'login_required': users, 'first_run': not auth_required(),
-                'key_required': (expected is not None or service.store.count_keys() > 0) and not users}
+                'key_required': (expected is not None or service.store.count_keys() > 0) and not users,
+                'public_url': public_url()}
 
     @application.post('/v1/auth/login')
     async def login(body: LoginRequest, request: Request, response: Response):

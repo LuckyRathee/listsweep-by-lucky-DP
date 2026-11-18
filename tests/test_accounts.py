@@ -289,7 +289,7 @@ async def test_the_first_account_set_up_in_open_mode_must_be_an_admin_and_switch
     app = create_app(store_path=str(tmp_path / 'o.sqlite3'), verifier=Verifier(DNS(), None))
     async with client_for(app) as client:
         status = (await client.get('/v1/auth/status')).json()
-        assert status == {'login_required': False, 'first_run': True, 'key_required': False}
+        assert status == {'login_required': False, 'first_run': True, 'key_required': False, 'public_url': ''}
         assert (await client.get('/v1/users')).json()['first_account'] is True
         no = await client.post('/v1/users', json={'email': 'a@example.com', 'role': 'user', 'password': 'Fr1st!Passw0rd'})
         assert no.status_code == 422
@@ -306,3 +306,15 @@ async def test_only_the_status_and_sign_in_pages_are_public(tmp_path):
         assert (await client.get('/')).status_code == 200
         for path in ('/v1/users', '/v1/keys', '/v1/config', '/v1/auth/me', '/v1/mcp-config'):
             assert (await client.get(path)).status_code == 401, path
+
+
+async def test_the_status_reports_a_well_formed_public_address_only(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    async with client_for(app) as client:
+        monkeypatch.delenv('EMAIL_VERIFIER_PUBLIC_URL', raising=False)
+        assert (await client.get('/v1/auth/status')).json()['public_url'] == ''
+        monkeypatch.setenv('EMAIL_VERIFIER_PUBLIC_URL', 'https://listsweep.example.com/')
+        assert (await client.get('/v1/auth/status')).json()['public_url'] == 'https://listsweep.example.com'
+        for bad in ('javascript:alert(1)', 'listsweep.example.com', 'https://x.example.com/path?q=1'):
+            monkeypatch.setenv('EMAIL_VERIFIER_PUBLIC_URL', bad)
+            assert (await client.get('/v1/auth/status')).json()['public_url'] == ''
