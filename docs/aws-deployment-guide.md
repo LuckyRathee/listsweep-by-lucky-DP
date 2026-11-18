@@ -9,7 +9,7 @@ This supplement covers deploying the conservative email-verification API.
 ## What is actually deployed, and how it differs from the plan below
 
 - **Server:** one `t4g.small` (Graviton/ARM, 2 vCPU, 2 GiB), Ubuntu 24.04 arm64, 20 GB encrypted gp3 disk, IMDSv2 required. Every resource is tagged `Project=listsweep`.
-- **Network (differs from the layout below):** the default VPC's public subnet with an Elastic IP and a security group with **zero inbound rules**, instead of a private subnet with a NAT gateway (which would add about $40 a month). Nothing on the internet can open a connection to the server. Outbound is narrowed to HTTPS, HTTP (apt mirrors), DNS and time sync; outbound port 25 is not allowed.
+- **Network (differs from the layout below):** the default VPC's public subnet with an Elastic IP and a security group with **zero inbound rules**, instead of a private subnet with a NAT gateway (which would add about $40 a month). Nothing on the internet can open a connection to the server. Outbound is narrowed to HTTPS, HTTP (apt mirrors), DNS and time sync; outbound TCP/25 was opened on the security group afterwards, but AWS still blocks it at the platform level until its request is approved (a test connection to Google's mail servers timed out).
 - **Access:** AWS Session Manager only. There is no SSH key pair, and the SSH service is switched off. The instance role has only `AmazonSSMManagedInstanceCore`.
 - **Secrets:** the first admin's settings were stored as a temporary encrypted SSM parameter, read once by the server into a root-only `.env` (mode 600), and then the parameter and the extra permission that allowed the read were deleted.
 - **Code:** cloned from the public repository into `/opt/email-verifier`. Updates are manual; there is no auto-update.
@@ -71,14 +71,14 @@ aws iam list-attached-role-policies --role-name AWSDataLifecycleManagerDefaultRo
 1. **Ask AWS to lift the port-25 block.** Submit AWS's "Request to remove email sending limitations" form (linked from the AWS article in the sources, reference [4]). Give the Elastic IP address as the address to un-throttle, and the same hostname as the reverse DNS name (step 3). Suggested use case: *"We verify that recipient mailboxes exist before contacting business leads. The server opens an SMTP connection to the recipient's mail server, issues MAIL FROM and RCPT TO, and disconnects without sending a message. It limits itself to a few connections per mail server, identifies itself with a real hostname and an SPF-protected domain, and never sends mail. Abuse reports go to <your address>."* Approval can take a day or more and is not guaranteed for new accounts.
 2. **Create DNS records for a dedicated probe name.** Pick a subdomain you control, for example `probe.example.com`: an `A` record pointing to the server's Elastic IP, and a `TXT` record `v=spf1 -all` on that name. The app requires the sender address and the HELO name to be on the same domain, so use `probe@probe.example.com`. Do not reuse a domain you send real email from.
 3. **Set reverse DNS (PTR) for the Elastic IP** to that same name, once the `A` record from step 2 exists. Try it yourself first: `aws ec2 modify-address-attribute --region ap-south-1 --allocation-id <eipalloc-id> --domain-name probe.example.com`. If AWS refuses, include it in the form from step 1. A matching forward and reverse name makes remote servers much more willing to answer.
-4. **Open outbound port 25 on the firewall, after AWS approves.** It is closed on purpose, and approval alone is not enough because the security group would still block it:
+4. **Open outbound port 25 on the firewall.** *Already done for this deployment; the rule is tagged `Project=listsweep`.* Approval alone is not enough, because the security group also has to allow it. For reference, the command was:
 
    ```sh
    aws ec2 authorize-security-group-egress --region ap-south-1 --group-id <sg-id> \
      --ip-permissions 'IpProtocol=tcp,FromPort=25,ToPort=25,IpRanges=[{CidrIp=0.0.0.0/0,Description=mailbox checks}]'
    ```
 
-   To close it again, run the same command as `revoke-security-group-egress`.
+   To close it again, run the same command as `revoke-security-group-egress`. Until step 1 is approved, a connection to port 25 on any mail server still times out, so leave `VERIFIER_SMTP_ENABLED` off.
 5. **Then** set the three lines in `.env` as shown above and run `sudo docker compose up -d`.
 
 Even then, large providers (Microsoft 365 in particular) often refuse unfamiliar senders, so expect `unknown` results for some addresses.
@@ -169,7 +169,7 @@ This verifier does **not** require SES and should not send mail. If a separately
 
 **Release gate** (status after the first deployment):
 
-- [x] No inbound path from the internet: the security group has zero inbound rules, the SSH service is disabled (and stays off after a reboot), and `ss -ltnp` on the server shows only `127.0.0.1:8080` plus local DNS. Outbound TCP/25 is not allowed.
+- [x] No inbound path from the internet: the security group has zero inbound rules, the SSH service is disabled (and stays off after a reboot), and `ss -ltnp` on the server shows only `127.0.0.1:8080` plus local DNS. Outbound TCP/25 is allowed by the security group (needed for mailbox checks) but blocked by AWS until approved; there is still no way in from the internet.
 - [x] `docker compose up --build` succeeded on arm64 and `docker compose ps` reports healthy; the container runs as a non-root user and owns its data volume.
 - [x] On the server: `/healthz` is ok, the sign-in page is served, requests without sign-in get 401, a wrong password gets 401, and the admin account signs in and out.
 - [x] Domain checks work against the real resolver: a real domain returns `unknown / mailbox_check_disabled` with its mail servers, and a non-existent domain returns `undeliverable / domain_not_found`.
