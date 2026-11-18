@@ -28,6 +28,8 @@ click==8.5.1
     # via uvicorn
 cryptography==50.0.2
     # via pyjwt
+defusedxml==0.7.1
+    # via lead-email-verifier
 dnspython==2.9.2
     # via
     #   email-validator

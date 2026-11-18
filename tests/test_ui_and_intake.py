@@ -280,3 +280,10 @@ async def test_sheet_route_creates_a_job_and_surfaces_fetch_errors(tmp_path):
     async with client_for(make_app(tmp_path, sheet_fetcher=bad)) as client:
         failed = await client.post('/v1/verify/sheet', headers={'X-API-Key': KEY}, json={'url': link})
         assert failed.status_code == 422 and failed.json()['detail'] == NOT_PUBLIC
+
+
+async def test_home_screen_has_the_single_address_form(tmp_path):
+    async with client_for(make_app(tmp_path)) as client:
+        html = (await client.get('/')).text
+        for marker in ('id="single-form"', 'id="single-email"', 'id="single-result"', 'Check an email address'):
+            assert marker in html

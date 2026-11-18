@@ -35,16 +35,21 @@ def xlsx_to_csv(content: bytes) -> bytes:
         stream = StringIO(newline='')
         writer = csv.writer(stream)
         wrote = 0
-        for index, row in enumerate(sheet.iter_rows(values_only=True, max_col=MAX_COLUMNS), start=1):
-            if index > MAX_ROWS_READ:
-                raise ValueError(f'Sheet has more than {MAX_ROWS_READ} rows; split it into smaller files')
-            cells = ['' if value is None else str(value) for value in row]
-            while cells and not cells[-1].strip():
-                cells.pop()  # read-only sheets pad every row out to max_col
-            if not cells:
-                continue
-            writer.writerow(cells)
-            wrote += 1
+        try:
+            for index, row in enumerate(sheet.iter_rows(values_only=True, max_col=MAX_COLUMNS), start=1):
+                if index > MAX_ROWS_READ:
+                    raise ValueError(f'Sheet has more than {MAX_ROWS_READ} rows; split it into smaller files')
+                cells = ['' if value is None else str(value) for value in row]
+                while cells and not cells[-1].strip():
+                    cells.pop()  # read-only sheets pad every row out to max_col
+                if not cells:
+                    continue
+                writer.writerow(cells)
+                wrote += 1
+        except ValueError:
+            raise
+        except Exception as error:  # malformed or hostile XML (entities are refused via defusedxml)
+            raise ValueError('Excel file could not be read') from error
         if not wrote:
             raise ValueError('Sheet is empty')
         return stream.getvalue().encode('utf-8')

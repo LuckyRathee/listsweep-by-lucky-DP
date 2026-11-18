@@ -24,6 +24,7 @@ const REASONS = {
   dns_timeout: 'DNS lookup timed out',
   dns_no_nameservers: 'No DNS server answered',
   dns_failure: 'DNS lookup failed',
+  no_mail_host: 'Domain exists but has no mail server or address record',
   queued: 'Waiting to be checked',
 };
 const STATUS_LABEL = {
@@ -32,6 +33,7 @@ const STATUS_LABEL = {
 const ROUTES = [
   ['GET /healthz', 'Liveness, no key needed'],
   ['GET /v1/config', 'Limits and which checks are available'],
+  ['POST /v1/verify/email', 'JSON {email, check_dns, allow_smtp}; one address, answered immediately'],
   ['POST /v1/verify/csv', 'Upload a CSV (multipart: file, check_dns, allow_smtp, concurrency)'],
   ['POST /v1/verify/xlsx', 'Upload an Excel .xlsx (same fields)'],
   ['POST /v1/verify/sheet', 'JSON {url, check_dns, allow_smtp, concurrency} for a public Google Sheet'],
@@ -101,6 +103,7 @@ function setConnected(ok, text) {
   pill.textContent = text;
   pill.className = ok ? 'pill ok' : 'pill';
   $('start').disabled = !ok || !startReady();
+  refreshSingle();
 }
 
 async function loadConfig() {
@@ -108,6 +111,7 @@ async function loadConfig() {
     state.config = await getJson('/v1/config');
     setConnected(true, state.config.auth_required ? 'Connected' : 'Connected (no key required)');
     $('smtp-row').hidden = !state.config.smtp_available;
+    $('single-smtp-row').hidden = !state.config.smtp_available;
     $('smtp-off').hidden = state.config.smtp_available;
     $('opt-conc').max = state.config.concurrency_range[1];
     notice('');
@@ -121,6 +125,65 @@ async function loadConfig() {
       notice(error.message);
     }
     return false;
+  }
+}
+
+/* ---------- single address ---------- */
+const VERDICT = {
+  deliverable_candidate: ['Deliverable candidate', 'The server accepted this exact address. That is evidence, not a guarantee that mail will arrive.'],
+  unknown: ['Unknown', 'Not enough evidence to call this address valid or invalid. Unknown is never treated as valid.'],
+  undeliverable: ['Undeliverable', 'This address is very unlikely to receive mail.'],
+};
+
+function refreshSingle() {
+  $('single-go').disabled = !state.config || !$('single-email').value.trim();
+}
+
+function fact(label, value) { return [el('dt', { text: label }), el('dd', { text: value })]; }
+
+function renderSingle(r) {
+  const [headline, meaning] = VERDICT[r.status] || [r.status, ''];
+  $('sr-badge').className = `badge big ${r.status}`;
+  $('sr-badge').textContent = headline;
+  $('sr-text').textContent = `${REASONS[r.reason] || r.reason}. ${meaning}`;
+  const yesNo = (value) => (value ? 'Yes' : 'No');
+  const rows = [
+    ...fact('Address', r.email),
+    ...fact('Syntax', r.syntax_valid ? 'Valid' : 'Not a valid email address'),
+    ...(r.domain ? fact('Domain', r.domain) : []),
+    ...fact('Mail records (DNS)', r.dns_checked ? (r.mx_hosts.length ? `Checked: ${r.mx_hosts.slice(0, 3).join(', ')}` : 'Checked') : 'Not checked'),
+    ...fact('Mailbox (SMTP)', r.smtp_checked ? (r.smtp_code ? `Checked (server replied ${r.smtp_code})` : 'Checked') : 'Not checked'),
+    ...fact('Role address', yesNo(r.role_based)),
+    ...fact('Disposable domain', yesNo(r.disposable)),
+    ...fact('Catch-all domain', yesNo(r.catch_all)),
+    ...fact('Send-eligible', yesNo(r.send_eligible)),
+  ];
+  $('sr-facts').replaceChildren(...rows);
+  $('single-result').hidden = false;
+}
+
+async function verifyOne(event) {
+  event.preventDefault();
+  const email = $('single-email').value.trim();
+  if (!email) return;
+  notice('');
+  $('single-go').disabled = true;
+  $('single-go').textContent = 'Checking…';
+  try {
+    const result = await getJson('/v1/verify/email', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email, check_dns: $('single-dns').checked,
+        allow_smtp: !$('single-smtp-row').hidden && $('single-smtp').checked,
+      }),
+    });
+    renderSingle(result);
+  } catch (error) {
+    $('single-result').hidden = true;
+    notice(error.message);
+  } finally {
+    $('single-go').textContent = 'Verify';
+    refreshSingle();
   }
 }
 
@@ -384,6 +447,8 @@ function init() {
   for (const type of ['dragleave', 'drop']) drop.addEventListener(type, (event) => { event.preventDefault(); drop.classList.remove('over'); });
   drop.addEventListener('drop', (event) => chooseFile(event.dataTransfer.files[0]));
   $('sheet-url').addEventListener('input', refreshStart);
+  $('single-form').addEventListener('submit', verifyOne);
+  $('single-email').addEventListener('input', refreshSingle);
   $('start').addEventListener('click', startJob);
   $('search').addEventListener('input', (event) => { state.query = event.target.value; state.page = 0; renderTable(); });
   $('prev').addEventListener('click', () => { state.page -= 1; renderTable(); });

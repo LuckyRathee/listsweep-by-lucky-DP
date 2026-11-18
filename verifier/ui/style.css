@@ -1,6 +1,6 @@
 /* Lead Email Verifier: neutral, minimal. Ink on off-white, one animated background layer. */
 :root {
-  --bg: #f7f7f5;
+  --bg: #f0f0ed;
   --surface: #ffffff;
   --surface-2: #f3f3f1;
   --ink: #141414;
@@ -31,27 +31,25 @@ body::before {
   position: fixed;
   inset: 0;
   z-index: -2;
-  background-image: radial-gradient(circle, rgba(20, 20, 20, 0.16) 1px, transparent 1.3px);
-  background-size: 24px 24px;
-  -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 35%, #000 0%, transparent 100%);
-  mask-image: radial-gradient(ellipse 80% 70% at 50% 35%, #000 0%, transparent 100%);
-  animation: grid-drift 90s linear infinite;
+  background-image: radial-gradient(circle, rgba(20, 20, 20, 0.22) 1px, transparent 1.4px);
+  background-size: 22px 22px;
+  animation: grid-drift 44s linear infinite;
 }
 body::after {
   content: "";
   position: fixed;
   top: -20vmax; left: -20vmax;
-  width: 70vmax; height: 70vmax;
+  width: 80vmax; height: 80vmax;
   z-index: -1;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0) 62%);
-  animation: light-drift 60s ease-in-out infinite alternate;
+  background: radial-gradient(circle, #ffffff 0%, rgba(255, 255, 255, 0.85) 25%, rgba(255, 255, 255, 0) 62%);
+  animation: light-drift 36s ease-in-out infinite alternate;
   will-change: transform;
   pointer-events: none;
 }
-@keyframes grid-drift { to { background-position: 240px 240px; } }
+@keyframes grid-drift { to { background-position: 220px 220px; } }
 @keyframes light-drift {
   from { transform: translate3d(0, 0, 0); }
-  to   { transform: translate3d(55vw, 30vh, 0); }
+  to   { transform: translate3d(70vw, 40vh, 0); }
 }
 @media (prefers-reduced-motion: reduce) {
   body::before, body::after { animation: none; }
@@ -195,3 +193,24 @@ footer { max-width: 960px; margin: 0 auto; padding: 18px 20px 34px; color: var(-
   .tile { border-left: 0; }
   main { padding-top: 16px; }
 }
+
+/* ---- hero: single address ---- */
+.hero { padding: 18px 0 26px; }
+.hero h1 { margin: 0 0 8px; font-size: 30px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.2; }
+.lede { margin: 0 0 20px; max-width: 560px; color: var(--muted); font-size: 15px; }
+.single { display: flex; gap: 8px; max-width: 640px; }
+.single input { flex: 1; min-width: 0; padding: 12px 14px; font-size: 16px; border-radius: 8px; }
+.btn.big { padding: 0 26px; font-size: 15px; border-radius: 8px; }
+.single-opts { margin: 10px 0 0; }
+.single-opts .check { font-size: 13px; color: var(--muted); }
+.single-result { max-width: 640px; margin: 18px 0 0; padding: 20px 22px; }
+.badge.big { font-size: 17px; font-weight: 600; gap: 9px; }
+.badge.big::before { width: 10px; height: 10px; }
+.verdict-text { margin: 6px 0 14px; color: var(--muted); }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0 22px; margin: 0; border-top: 1px solid var(--line); }
+.facts dt, .facts dd { margin: 0; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.facts dt { color: var(--muted); font-size: 13px; }
+.facts dd { word-break: break-word; }
+.facts dt:nth-last-child(2), .facts dd:last-child { border-bottom: 0; }
+.section-title { margin: 6px 0 12px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+@media (max-width: 600px) { .hero h1 { font-size: 24px; } .single { flex-direction: column; } .btn.big { padding: 12px; } .facts { grid-template-columns: 1fr; } .facts dt { padding-bottom: 0; border-bottom: 0; } }

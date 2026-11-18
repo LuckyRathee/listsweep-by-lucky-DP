@@ -4,7 +4,7 @@ import os
 
 from .csv_input import InputRow, parse_csv
 from .dns_checks import DNSResolver
-from .engine import Verifier
+from .engine import ROLE_LOCALS, Verifier
 from .smtp import AsyncSMTPProbe
 from .smtp_config import SMTPSettings
 from .store import Store
@@ -120,37 +120,71 @@ class JobService:
         tasks.add(task)
         task.add_done_callback(lambda completed: (tasks.discard(completed), completed.exception()))
 
+    async def check_address(self, email, allow_smtp=False, check_dns=False):
+        """Check one address with the same rules a job uses. Returns (normalized, result)."""
+        normalized = normalize(email)
+        try:
+            if not normalized:
+                result = {'normalized_email': None, 'status': 'undeliverable', 'reason': 'invalid_syntax'}
+            elif self.store.suppressed(normalized):
+                result = {
+                    'normalized_email': normalized, 'domain': normalized.rsplit('@', 1)[1],
+                    'status': 'undeliverable', 'reason': 'suppressed_prior_bounce',
+                }
+            elif not allow_smtp and check_dns:
+                # DNS evidence only (MX, null MX, NXDOMAIN); never a mailbox claim.
+                result = await self.verifier.verify(normalized, allow_smtp=False)
+            elif not allow_smtp:
+                result = {
+                    'normalized_email': normalized, 'domain': normalized.rsplit('@', 1)[1],
+                    'status': 'unknown', 'reason': 'verification_disabled',
+                }
+            else:
+                result = await self.verifier.verify(normalized, allow_smtp=True)
+        except Exception:
+            result = {
+                'normalized_email': normalized, 'status': 'unknown',
+                'reason': 'verification_error',
+            }
+        return normalized, result
+
+    async def verify_one(self, email, allow_smtp=False, check_dns=False):
+        """Verify a single address immediately (no job) and describe it for display."""
+        if not isinstance(email, str) or not email.strip() or len(email) > 320:
+            raise ValueError('Enter one email address of at most 320 characters')
+        self._check_dns_flag(check_dns)
+        self.require_smtp_if_requested(allow_smtp)
+        original = email.strip()
+        normalized, result = await self.check_address(original, allow_smtp, check_dns)
+        local, _, domain = (normalized or '').rpartition('@')
+        flags = list(result.get('flags', []))
+        role_based = bool(normalized) and local.lower().split('+')[0] in ROLE_LOCALS
+        if role_based and 'role_based' not in flags:
+            flags.append('role_based')
+        disposable = bool(result.get('disposable'))
+        catch_all = bool(result.get('catch_all'))
+        status, reason = result['status'], result['reason']
+        return {
+            'email': normalized or original, 'original_email': original,
+            'normalized_email': normalized, 'domain': domain or None,
+            'syntax_valid': bool(normalized), 'status': status, 'reason': reason,
+            'flags': flags, 'role_based': role_based, 'disposable': disposable,
+            'catch_all': catch_all, 'smtp_code': result.get('smtp_code'),
+            'mx_host': result.get('mx_host'), 'mx_hosts': result.get('mx_hosts', []),
+            'smtp_checked': allow_smtp, 'dns_checked': allow_smtp or check_dns,
+            'deliverable_candidate': status == 'deliverable_candidate',
+            'send_eligible': status == 'deliverable_candidate' and reason == 'smtp_rcpt_accepted'
+            and not (role_based or disposable or catch_all),
+        }
+
     async def _run_job(self, job_id, options):
         self.store.set_job_status(job_id, 'running')
         semaphore = asyncio.Semaphore(options['concurrency'])
 
         async def worker(row):
             async with semaphore:
-                email = row['email']
-                normalized = normalize(email)
-                try:
-                    if not normalized:
-                        result = {'normalized_email': None, 'status': 'undeliverable', 'reason': 'invalid_syntax'}
-                    elif self.store.suppressed(normalized):
-                        result = {
-                            'normalized_email': normalized, 'domain': normalized.rsplit('@', 1)[1],
-                            'status': 'undeliverable', 'reason': 'suppressed_prior_bounce',
-                        }
-                    elif not options['allow_smtp'] and options.get('check_dns'):
-                        # DNS evidence only (MX, null MX, NXDOMAIN); never a mailbox claim.
-                        result = await self.verifier.verify(normalized, allow_smtp=False)
-                    elif not options['allow_smtp']:
-                        result = {
-                            'normalized_email': normalized, 'domain': normalized.rsplit('@', 1)[1],
-                            'status': 'unknown', 'reason': 'verification_disabled',
-                        }
-                    else:
-                        result = await self.verifier.verify(normalized, allow_smtp=True)
-                except Exception:
-                    result = {
-                        'normalized_email': normalized, 'status': 'unknown',
-                        'reason': 'verification_error',
-                    }
+                _, result = await self.check_address(
+                    row['email'], options['allow_smtp'], bool(options.get('check_dns')))
                 self.store.save_result(job_id, row['position'], result)
 
         try:

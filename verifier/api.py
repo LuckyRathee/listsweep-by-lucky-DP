@@ -34,6 +34,12 @@ SECURITY_HEADERS = {
 }
 
 
+class EmailRequest(BaseModel):
+    email: str = Field(max_length=320)
+    allow_smtp: bool = False
+    check_dns: bool = False
+
+
 class SheetRequest(BaseModel):
     url: str = Field(max_length=2000)
     allow_smtp: bool = False
@@ -155,6 +161,16 @@ def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, 
                          check_dns: Annotated[bool, Form()] = False):
         content = await file.read(MAX_UPLOAD_BYTES + 1)
         return submit(content, allow_smtp, concurrency, check_dns, file.filename or 'upload.csv')
+
+    @application.post('/v1/verify/email')
+    async def verify_email(body: EmailRequest):
+        """Verify one address immediately; nothing is stored."""
+        try:
+            return await service.verify_one(body.email, body.allow_smtp, body.check_dns)
+        except PermissionError as error:
+            raise HTTPException(403, str(error)) from error
+        except (ValueError, TypeError) as error:
+            raise HTTPException(422, str(error)) from error
 
     @application.post('/v1/verify/xlsx', status_code=202)
     async def verify_xlsx(file: Annotated[UploadFile, File()],

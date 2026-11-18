@@ -28,8 +28,28 @@
     <div id="notice" class="notice" role="alert" hidden></div>
 
     <section id="panel-verify" role="tabpanel" aria-labelledby="tab-verify">
+    <section class="hero" aria-labelledby="hero-title">
+      <h1 id="hero-title">Check an email address</h1>
+      <p class="lede">See whether an address is valid, whether its domain can receive mail, and what could not be confirmed.</p>
+      <form class="single" id="single-form" novalidate>
+        <label class="sr" for="single-email">Email address</label>
+        <input id="single-email" type="text" inputmode="email" placeholder="name@company.com" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="320">
+        <button class="btn primary big" id="single-go" type="submit" disabled>Verify</button>
+      </form>
+      <div class="single-opts">
+        <label class="check"><input type="checkbox" id="single-dns" checked> Also check the domain's mail records</label>
+        <label class="check" id="single-smtp-row" hidden><input type="checkbox" id="single-smtp"> Live mailbox check (SMTP)</label>
+      </div>
+      <div class="card single-result" id="single-result" hidden aria-live="polite">
+        <div class="verdict"><span class="badge big" id="sr-badge"></span></div>
+        <p class="verdict-text" id="sr-text"></p>
+        <dl class="facts" id="sr-facts"></dl>
+      </div>
+    </section>
+
+    <h2 class="section-title">Or check a whole list</h2>
       <div class="card">
-        <h2>Check a list</h2>
+        
         <div class="seg" role="group" aria-label="Source">
           <button type="button" id="src-file" class="on" aria-pressed="true">CSV or Excel file</button>
           <button type="button" id="src-sheet" aria-pressed="false">Google Sheet link</button>

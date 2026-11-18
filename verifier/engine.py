@@ -9,6 +9,9 @@ from .syntax import normalize
 ROLE_LOCALS = {'admin', 'contact', 'hello', 'hr', 'info', 'jobs', 'marketing', 'office', 'sales', 'support'}
 
 
+MAX_CACHED_DOMAINS = 10_000
+
+
 class Verifier:
     def __init__(self, dns, smtp_probe, disposable=frozenset(), concurrency=10):
         self.dns = dns
@@ -23,9 +26,23 @@ class Verifier:
         async with self._mx_lock:
             task = self._mx_cache.get(domain)
             if task is None:
+                if len(self._mx_cache) >= MAX_CACHED_DOMAINS:
+                    self._mx_cache.clear()
                 task = asyncio.create_task(resolve_mx(self.dns, domain))
                 self._mx_cache[domain] = task
-        return await asyncio.shield(task)
+        try:
+            outcome = await asyncio.shield(task)
+        except Exception:
+            await self._forget(domain, task)
+            raise
+        if outcome.status == 'unknown':
+            await self._forget(domain, task)  # a transient failure must not stick until restart
+        return outcome
+
+    async def _forget(self, domain, task):
+        async with self._mx_lock:
+            if self._mx_cache.get(domain) is task:
+                del self._mx_cache[domain]
 
     def initial(self, email):
         normalized = normalize(email)
@@ -50,6 +67,7 @@ class Verifier:
             result['flags'].append('disposable')
             return result
         mx = await self._mx(domain)
+        result['mx_hosts'] = list(mx.hosts)
         if mx.status == 'undeliverable':
             result.update(status='undeliverable', reason=mx.reason)
         elif mx.status == 'unknown':

@@ -24,7 +24,7 @@ Most verifiers hand you a green tick and hope. This one doesn't. It sorts every 
 | Result | Meaning |
 | --- | --- |
 | `deliverable_candidate` | The server accepted this exact address and rejected a random control address, so it isn't a catch-all. Evidence, not proof. |
-| `undeliverable` | Definite failure: bad syntax, null MX, domain doesn't exist, disposable domain, a 550-class rejection, or a prior hard bounce. |
+| `undeliverable` | Definite failure: bad syntax, null MX, domain doesn't exist or has no mail server, a 550-class rejection, or a prior hard bounce. |
 | `unknown` | Not proven either way: timeouts, greylisting (4xx), catch-all domains, or checks switched off. |
 
 `send_eligible` is stricter still. It is true only for a `deliverable_candidate` that is not catch-all, not disposable and not a role address (`info@`, `sales@` and so on).
@@ -41,6 +41,7 @@ Most verifiers hand you a green tick and hope. This one doesn't. It sorts every 
 
 Open `http://127.0.0.1:8080/` and enter your API key. From the page you can:
 
+- **Check one address** from the box at the top: type it, press Verify, and see the verdict, the reason, the domain's mail servers, and whether it's a role address.
 - **Upload** a `.csv` or `.xlsx` file, or paste a link to a **Google Sheet** shared as "Anyone with the link can view".
 - Choose what to check: syntax (always), **domain mail records (DNS)**, and live SMTP checks if the server allows them.
 - Watch progress, then filter and search the results, and download everything or only the send-eligible rows.
@@ -88,6 +89,7 @@ Authenticate with `X-API-Key: <key>` **or** `Authorization: Bearer <key>`.
 | `GET /healthz` | Liveness, no auth |
 | `GET /` and `/ui/*` | The web interface, no key needed |
 | `GET /v1/config` | Limits, and whether DNS and SMTP checks are available |
+| `POST /v1/verify/email` | One address, answered immediately and not stored (JSON `email`, optional `check_dns`, `allow_smtp`) |
 | `POST /v1/verify/csv` | Upload a CSV (`file`, optional `check_dns`, `allow_smtp`, `concurrency` 1-25); returns 202 and a `job_id` |
 | `POST /v1/verify/xlsx` | Same, for an Excel `.xlsx` file |
 | `POST /v1/verify/sheet` | JSON `{"url": "...", "check_dns": true}` for a publicly shared Google Sheet |
@@ -153,7 +155,7 @@ The suite uses fake DNS and a local SMTP fixture, so no real addresses are probe
 ## Roadmap
 
 - [x] Opt-in DNS-only checks (MX, null-MX, bad domain) without SMTP
-- [x] Web UI: upload, live progress, results table, downloads, job history, API tab
+- [x] Web UI: single-address check, upload, live progress, results table, downloads, job history, API tab
 - [x] Excel (`.xlsx`) and Google Sheets (public link) import
 - [ ] Private Google Sheets via Google sign-in
 - [ ] Multiple API keys, and webhooks when a job finishes

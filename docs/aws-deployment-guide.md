@@ -1,6 +1,6 @@
 # AWS EC2 supplement: conservative email-verification API
 
-**Status: nothing is deployed to AWS.** This guide describes how to deploy the code in this repository to a single EC2 instance; no instance, security group, or AWS integration exists yet. The application code and its 77 tests pass locally (`pytest`), but the `Dockerfile` and `docker-compose.yml` have **not been built or run** (Docker was not available when they were written), so treat the first `docker compose up --build` as the first real test.
+**Status: nothing is deployed to AWS.** This guide describes how to deploy the code in this repository to a single EC2 instance; no instance, security group, or AWS integration exists yet. The application code and its 87 tests pass locally (`pytest`), but the `Dockerfile` and `docker-compose.yml` have **not been built or run** (Docker was not available when they were written), so treat the first `docker compose up --build` as the first real test.
 
 **Storage is SQLite on a Docker named volume.** PostgreSQL is *not* implemented: `verifier/store.py` uses `sqlite3` only, and there is no `DATABASE_URL` setting. Moving to PostgreSQL is a separate work item (store rewrite, migrations, backup/restore), not a configuration change. Names, ports, and environment variables below match the code as of this revision.
 
@@ -51,7 +51,7 @@ The repository's `docker-compose.yml` runs one service, `api`, with these settin
 
 The port is published on `127.0.0.1:8080` only. Send the key as `X-API-Key: <key>` **or** `Authorization: Bearer <key>`; both are accepted and compared in constant time. `/healthz` is the only unauthenticated path. Reaching the API over the SSH tunnel is not a substitute for the key, and TLS in front of it would not be either; keep the key and any IP restrictions.
 
-API routes: `POST /v1/verify/csv`, `POST /v1/verify/xlsx` and `POST /v1/verify/sheet` (all return 202 with `job_id`; options `check_dns`, `allow_smtp`, `concurrency`), `GET /v1/config`, `GET /v1/jobs`, `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/results` and `GET /v1/jobs/{id}/results.csv` (both accept `send_only=true`). Limits: 2,000 unique addresses, 1.5 MB per CSV, 5 MB per `.xlsx`. Jobs interrupted by a restart are resumed on startup.
+API routes: `POST /v1/verify/email` (one address, answered immediately, nothing stored), `POST /v1/verify/csv`, `POST /v1/verify/xlsx` and `POST /v1/verify/sheet` (all return 202 with `job_id`; options `check_dns`, `allow_smtp`, `concurrency`), `GET /v1/config`, `GET /v1/jobs`, `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/results` and `GET /v1/jobs/{id}/results.csv` (both accept `send_only=true`). Limits: 2,000 unique addresses, 1.5 MB per CSV, 5 MB per `.xlsx`. Jobs interrupted by a restart are resumed on startup.
 
 **Web interface.** The same service serves a browser page at `/` (static files under `verifier/ui/`, copied into the image with the rest of `verifier/`). The page shell is the only unauthenticated content; every data route still needs the key, and `/docs` stays behind it. Open it through the same SSH tunnel at `http://127.0.0.1:8080/`. It sends the key as a header only and holds it in session storage; responses carry a strict Content-Security-Policy.
 

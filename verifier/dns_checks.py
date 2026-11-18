@@ -33,25 +33,41 @@ class DNSResolver:
         return addresses
 
 
+def _failure(error) -> MailDNS | None:
+    """Map a resolver error to a conservative outcome; None means 'no data of this type'."""
+    if isinstance(error, dns.resolver.NXDOMAIN):
+        return MailDNS('undeliverable', 'domain_not_found', [])
+    if isinstance(error, dns.resolver.NoNameservers):
+        return MailDNS('unknown', 'dns_no_nameservers', [])
+    if isinstance(error, dns.exception.Timeout):
+        return MailDNS('unknown', 'dns_timeout', [])
+    if isinstance(error, (dns.resolver.NoAnswer,)):
+        return None
+    return MailDNS('unknown', 'dns_failure', [])
+
+
+async def _implicit_mx(resolver, domain: str) -> MailDNS:
+    """RFC 5321 fallback: with no MX, the domain's own A/AAAA record is the mail host."""
+    for record in ('A', 'AAAA'):
+        try:
+            await resolver.resolve(domain, record)
+            return MailDNS('deliverable_candidate', 'a_aaaa_fallback', [domain], True)
+        except dns.exception.DNSException as error:
+            outcome = _failure(error)
+            if outcome is not None:
+                return outcome
+    return MailDNS('undeliverable', 'no_mail_host', [])
+
+
 async def resolve_mx(resolver, domain: str) -> MailDNS:
     try:
         answers = await resolver.resolve(domain, 'MX')
-        records = sorted(answers, key=lambda r: r.preference)
-        if len(records) == 1 and str(records[0].exchange) == '.':
-            return MailDNS('undeliverable', 'null_mx', [])
-        hosts = [str(r.exchange).rstrip('.') for r in records]
-        return MailDNS('deliverable_candidate', 'mx_found', hosts)
-    except (dns.resolver.NoAnswer, getattr(dns.resolver, "NODATA", dns.resolver.NoAnswer)):
-        try:
-            await resolver.resolve(domain, 'A')
-        except (dns.resolver.NoAnswer, getattr(dns.resolver, "NODATA", dns.resolver.NoAnswer)):
-            await resolver.resolve(domain, 'AAAA')
-        return MailDNS('deliverable_candidate', 'a_aaaa_fallback', [domain], True)
-    except dns.resolver.NXDOMAIN:
-        return MailDNS('undeliverable', 'domain_not_found', [])
-    except dns.resolver.NoNameservers:
-        return MailDNS('unknown', 'dns_no_nameservers', [])
-    except dns.resolver.Timeout:
-        return MailDNS('unknown', 'dns_timeout', [])
-    except dns.exception.DNSException:
-        return MailDNS('unknown', 'dns_failure', [])
+    except dns.resolver.NoAnswer:
+        return await _implicit_mx(resolver, domain)
+    except dns.exception.DNSException as error:
+        return _failure(error) or MailDNS('unknown', 'dns_failure', [])
+    records = sorted(answers, key=lambda r: r.preference)
+    if len(records) == 1 and str(records[0].exchange) == '.':
+        return MailDNS('undeliverable', 'null_mx', [])
+    hosts = [str(r.exchange).rstrip('.') for r in records]
+    return MailDNS('deliverable_candidate', 'mx_found', hosts)
