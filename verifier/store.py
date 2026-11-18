@@ -98,6 +98,10 @@ class Store:
             'SELECT status, COUNT(*) FROM results WHERE job_id=? GROUP BY status',
             (item['id'],),
         ).fetchall())
+        item['reason_counts'] = dict(db.execute(
+            'SELECT reason, COUNT(*) FROM results WHERE job_id=? GROUP BY reason',
+            (item['id'],),
+        ).fetchall())
         item['eligible_count'] = sum(
             1 for r in self.results(item['id']) if r['send_eligible']
         )
@@ -113,6 +117,9 @@ class Store:
                 item['options'] = json.loads(item['options'])
                 item['counts'] = dict(db.execute(
                     'SELECT status, COUNT(*) FROM results WHERE job_id=? GROUP BY status',
+                    (item['id'],)).fetchall())
+                item['reason_counts'] = dict(db.execute(
+                    'SELECT reason, COUNT(*) FROM results WHERE job_id=? GROUP BY reason',
                     (item['id'],)).fetchall())
                 jobs.append(item)
             return jobs

@@ -10,6 +10,10 @@ from .smtp_config import SMTPSettings
 from .store import Store
 from .syntax import normalize
 
+# Bump when result semantics change, so older jobs can be flagged and re-checked.
+# 1 = before the SMTP/DNS classification fixes; 2 = current.
+RESULT_VERSION = 2
+
 
 def domain_key(email: str) -> str:
     """Treat domain names case-insensitively without collapsing local-part casing."""
@@ -17,6 +21,26 @@ def domain_key(email: str) -> str:
     if not normalized:
         return email.strip()
     return normalized[:normalized.rfind('@')] + '@' + normalized.rsplit('@', 1)[1].lower()
+
+
+SMTP_ANSWERED = {
+    'smtp_rcpt_accepted', 'smtp_mailbox_rejected', 'catch_all_domain', 'smtp_control_inconclusive',
+    'smtp_ambiguous_response', 'smtp_connection_dropped', 'smtp_temporary_failure',
+}
+SMTP_UNREACHABLE = {'smtp_unreachable', 'smtp_unresolved', 'smtp_non_public_target'}
+
+
+def smtp_outcome_for(allow_smtp: bool, reason: str) -> str:
+    """What really happened at the mailbox step, from the result and not from the request."""
+    if not allow_smtp:
+        return 'not_run'
+    if reason in SMTP_ANSWERED:
+        return 'answered'
+    if reason == 'smtp_blocked_by_policy':
+        return 'refused'
+    if reason in SMTP_UNREACHABLE:
+        return 'unreachable'
+    return 'skipped'  # stopped earlier (syntax, DNS, suppression) so SMTP was never attempted
 
 
 class JobService:
@@ -39,6 +63,7 @@ class JobService:
             smtp_enabled = os.getenv('VERIFIER_SMTP_ENABLED', '').lower() == 'true'
         self.smtp_enabled = bool(smtp_enabled)
         self._tasks = {}
+        self._cancelled = set()
 
     @staticmethod
     def dedupe(emails):
@@ -87,6 +112,7 @@ class JobService:
         self.require_smtp_if_requested(allow_smtp)
         job_id = self.store.create_job(rows, duplicates, {
             'allow_smtp': allow_smtp, 'concurrency': concurrency, 'check_dns': check_dns,
+            'engine': RESULT_VERSION,
         })
         self.schedule(job_id)
         return job_id
@@ -105,7 +131,7 @@ class JobService:
         self.require_smtp_if_requested(allow_smtp)
         job_id = self.store.create_job(rows, duplicates, {
             'allow_smtp': allow_smtp, 'concurrency': concurrency, 'filename': filename,
-            'check_dns': check_dns,
+            'check_dns': check_dns, 'engine': RESULT_VERSION,
         })
         self.schedule(job_id)
         return job_id
@@ -122,7 +148,8 @@ class JobService:
             return
         task = loop.create_task(self._run_job(job_id, options), name=f'verify-{job_id}')
         tasks.add(task)
-        task.add_done_callback(lambda completed: (tasks.discard(completed), completed.exception()))
+        task.add_done_callback(
+            lambda completed: (tasks.discard(completed), completed.cancelled() or completed.exception()))
 
     async def check_address(self, email, allow_smtp=False, check_dns=False):
         """Check one address with the same rules a job uses. Returns (normalized, result)."""
@@ -168,6 +195,9 @@ class JobService:
         disposable = bool(result.get('disposable'))
         catch_all = bool(result.get('catch_all'))
         status, reason = result['status'], result['reason']
+        smtp_outcome = smtp_outcome_for(allow_smtp, reason)
+        dns_checked = bool(normalized) and (allow_smtp or check_dns) and reason not in (
+            'suppressed_prior_bounce', 'verification_error')
         return {
             'email': normalized or original, 'original_email': original,
             'normalized_email': normalized, 'domain': domain or None,
@@ -175,7 +205,8 @@ class JobService:
             'flags': flags, 'role_based': role_based, 'disposable': disposable,
             'catch_all': catch_all, 'smtp_code': result.get('smtp_code'),
             'mx_host': result.get('mx_host'), 'mx_hosts': result.get('mx_hosts', []),
-            'smtp_checked': allow_smtp, 'dns_checked': allow_smtp or check_dns,
+            'smtp_checked': smtp_outcome == 'answered', 'smtp_outcome': smtp_outcome,
+            'dns_checked': dns_checked,
             'deliverable_candidate': status == 'deliverable_candidate',
             'send_eligible': status == 'deliverable_candidate' and reason == 'smtp_rcpt_accepted'
             and not (role_based or disposable or catch_all),
@@ -194,12 +225,57 @@ class JobService:
         try:
             await asyncio.gather(*(worker(row) for row in self.store.pending(job_id)))
         except asyncio.CancelledError:
-            self.store.set_job_status(job_id, 'queued')
+            if job_id in self._cancelled:
+                self._cancelled.discard(job_id)
+                self.store.set_job_status(job_id, 'cancelled')
+            else:
+                self.store.set_job_status(job_id, 'queued')  # shutdown: resume on next start
             raise
         except Exception as error:
             self.store.set_job_status(job_id, 'failed', error=str(error))
             raise
         self.store.set_job_status(job_id, 'completed', processed=self.store.job(job_id)['processed'])
+
+    def cancel(self, job_id):
+        """Stop a queued or running job. Results already saved are kept."""
+        job = self.store.job(job_id)
+        if job is None:
+            raise KeyError('job_not_found')
+        if job['status'] not in ('queued', 'running'):
+            raise ValueError('Only a queued or running job can be cancelled')
+        running = [task for tasks in self._tasks.values() for task in tasks
+                   if task.get_name() == f'verify-{job_id}' and not task.done()]
+        if running:
+            self._cancelled.add(job_id)
+            for task in running:
+                task.cancel()
+        else:
+            self.store.set_job_status(job_id, 'cancelled')
+        return job_id
+
+    def recheck(self, job_id, scope='unknown'):
+        """Start a new job from a finished job's addresses: the unresolved ones, or all."""
+        if scope not in ('unknown', 'all'):
+            raise ValueError("scope must be 'unknown' or 'all'")
+        job = self.store.job(job_id)
+        if job is None:
+            raise KeyError('job_not_found')
+        if job['status'] in ('queued', 'running'):
+            raise ValueError('Wait for the job to finish (or cancel it) before re-checking')
+        picked = [r for r in self.store.results(job_id)
+                  if scope == 'all' or r['status'] == 'unknown' or r['reason'] == 'queued']
+        if not picked:
+            raise ValueError('Nothing to re-check')
+        rows = [InputRow(index, r['email'], r['original_email'], r['metadata'])
+                for index, r in enumerate(picked, start=1)]
+        options = dict(job['options'])
+        self.require_smtp_if_requested(bool(options.get('allow_smtp')))
+        base = options.get('filename') or 'job'
+        options.update(engine=RESULT_VERSION, rechecked_from=job_id,
+                       filename=f'{base} (re-check)' if '(re-check)' not in base else base)
+        new_id = self.store.create_job(rows, 0, options)
+        self.schedule(new_id)
+        return new_id
 
     def get_job(self, job_id):
         return self.store.job(job_id)

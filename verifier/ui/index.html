@@ -3,54 +3,58 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>List Sweep by Digital Patron</title>
-  <link rel="icon" type="image/png" href="/ui/digital-patron-logo.png">
+  <title>ListSweep by DigitalPatron</title>
+  <link rel="icon" type="image/png" href="/ui/digital-patron-icon.png">
   <link rel="stylesheet" href="/ui/style.css">
   <script src="/ui/app.js" defer></script>
 </head>
 <body>
   <header class="top">
-    <div class="brand"><img class="mark" src="/ui/digital-patron-logo.png" alt="Digital Patron" width="28" height="30"><span class="brand-text"><span class="brand-name">ListSweep</span><span class="brand-by">by DigitalPatron</span></span></div>
-    <form class="keybox" id="key-form" autocomplete="off">
-      <label for="api-key" class="sr">API key</label>
-      <input id="api-key" type="password" placeholder="API key" autocomplete="off" spellcheck="false">
-      <button type="submit" class="btn small">Connect</button>
-      <span id="conn" class="pill" role="status">Not connected</span>
-    </form>
+    <a class="brand" href="#/verify" aria-label="ListSweep by DigitalPatron, home">
+      <img class="mark" src="/ui/digital-patron-logo.png" alt="" width="28" height="30">
+      <span class="brand-text"><span class="brand-name">ListSweep</span><span class="brand-by">by DigitalPatron</span></span>
+    </a>
+    <div class="conn-area">
+      <span id="conn" class="pill pending" role="status">Connecting…</span>
+      <form class="keybox" id="key-form" autocomplete="off" hidden>
+        <label for="api-key" class="sr">API key</label>
+        <input id="api-key" type="password" placeholder="API key" autocomplete="off" spellcheck="false">
+        <button type="submit" class="btn small">Connect</button>
+        <button type="button" class="btn small" id="forget-key" hidden>Forget key</button>
+      </form>
+    </div>
   </header>
 
   <nav class="tabs" role="tablist" aria-label="Sections">
-    <button role="tab" id="tab-verify" aria-controls="panel-verify" aria-selected="true">Verify</button>
-    <button role="tab" id="tab-jobs" aria-controls="panel-jobs" aria-selected="false">Jobs</button>
-    <button role="tab" id="tab-api" aria-controls="panel-api" aria-selected="false">API</button>
+    <button role="tab" id="tab-verify" aria-controls="panel-verify" aria-selected="true" tabindex="0">Verify</button>
+    <button role="tab" id="tab-jobs" aria-controls="panel-jobs" aria-selected="false" tabindex="-1">Jobs</button>
+    <button role="tab" id="tab-api" aria-controls="panel-api" aria-selected="false" tabindex="-1">API</button>
   </nav>
 
   <main>
     <div id="notice" class="notice" role="alert" hidden></div>
 
     <section id="panel-verify" role="tabpanel" aria-labelledby="tab-verify">
-    <section class="hero" aria-labelledby="hero-title">
-      <h1 id="hero-title">Check an email address</h1>
-      <p class="lede">See whether an address is valid, whether its domain can receive mail, and what could not be confirmed.</p>
-      <form class="single" id="single-form" novalidate>
-        <label class="sr" for="single-email">Email address</label>
-        <input id="single-email" type="text" inputmode="email" placeholder="name@company.com" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="320">
-        <button class="btn primary big" id="single-go" type="submit" disabled>Verify</button>
-      </form>
-      <div class="single-opts">
-        <label class="check"><input type="checkbox" id="single-dns" checked> Also check the domain's mail records</label>
-        <label class="check" id="single-smtp-row" hidden><input type="checkbox" id="single-smtp" checked> Live mailbox check (SMTP)</label>
-      </div>
-      <div class="card single-result" id="single-result" hidden aria-live="polite">
-        <div class="verdict"><span class="badge big" id="sr-badge"></span></div>
-        <p class="verdict-text" id="sr-text"></p>
-        <dl class="facts" id="sr-facts"></dl>
-      </div>
-    </section>
+      <section class="hero" aria-labelledby="hero-title">
+        <h1 id="hero-title">Check an email address</h1>
+        <p class="lede">See whether an address is valid, whether its domain can receive mail, and what could not be confirmed.</p>
+        <form class="single" id="single-form" novalidate>
+          <label class="sr" for="single-email">Email address</label>
+          <input id="single-email" type="text" inputmode="email" placeholder="name@company.com" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="320">
+          <button class="btn primary big" id="single-go" type="submit" disabled>Verify</button>
+        </form>
+        <div class="depth" id="single-depth" role="radiogroup" aria-label="How thorough"></div>
+        <p class="hint" id="single-hint"></p>
+        <div class="card single-result" id="single-result" hidden aria-live="polite">
+          <div class="verdict"><span class="badge big" id="sr-badge"></span></div>
+          <p class="verdict-text" id="sr-text"></p>
+          <p class="caveat" id="sr-caveat"></p>
+          <dl class="facts" id="sr-facts"></dl>
+        </div>
+      </section>
 
-    <h2 class="section-title">Or check a whole list</h2>
+      <h2 class="section-title">Or check a whole list</h2>
       <div class="card">
-        
         <div class="seg" role="group" aria-label="Source">
           <button type="button" id="src-file" class="on" aria-pressed="true">CSV or Excel file</button>
           <button type="button" id="src-sheet" aria-pressed="false">Google Sheet link</button>
@@ -70,39 +74,55 @@
           <p class="hint">Private sheets can't be read. Download them as CSV or Excel and upload the file instead.</p>
         </div>
 
-        <fieldset class="opts">
-          <legend>What to check</legend>
-          <label class="check"><input type="checkbox" checked disabled> Syntax <small>always on</small></label>
-          <label class="check"><input type="checkbox" id="opt-dns" checked> Domain mail records (DNS) <small>finds domains that can't receive mail</small></label>
-          <label class="check" id="smtp-row" hidden><input type="checkbox" id="opt-smtp" checked> Live mailbox check (SMTP) <small>probes the receiving server</small></label>
-          <label class="num">Parallel checks <input type="number" id="opt-conc" min="1" max="25" value="4"></label>
-        </fieldset>
-
-        <p id="smtp-off" class="hint" hidden>Live mailbox checks are switched off on this server, so no address can be confirmed as a deliverable candidate. Results will be <em>undeliverable</em> or <em>unknown</em>.</p>
+        <div class="opts">
+          <span class="opts-label" id="bulk-depth-label">How thorough</span>
+          <div class="depth" id="bulk-depth" role="radiogroup" aria-labelledby="bulk-depth-label"></div>
+          <p class="hint" id="bulk-hint"></p>
+          <details class="advanced">
+            <summary>Advanced</summary>
+            <label class="num" for="opt-conc">Parallel checks <input type="number" id="opt-conc" min="1" max="25" value="4"></label>
+            <p class="hint">Lower is gentler on recipient mail servers. 4 is a sensible default.</p>
+          </details>
+        </div>
 
         <button class="btn primary" id="start" type="button" disabled>Start verification</button>
       </div>
 
       <div class="card" id="progress-card" hidden>
-        <h2 id="progress-title">Verifying</h2>
+        <div class="toolbar">
+          <h2 id="progress-title">Verifying</h2>
+          <span class="grow"></span>
+          <button class="btn small" id="cancel-job" type="button">Cancel</button>
+        </div>
         <progress id="progress" max="100" value="0"></progress>
         <p id="progress-text" class="hint"></p>
       </div>
 
       <div id="results" hidden>
+        <h2 class="section-title" id="results-title" tabindex="-1">Results</h2>
         <div class="tiles" id="tiles"></div>
+        <div class="card" id="stale" hidden>
+          <p class="stale-text" id="stale-text"></p>
+          <button class="btn small" id="recheck-stale" type="button">Re-check all</button>
+        </div>
+        <div class="card" id="run-summary-card" hidden>
+          <h2>About this run</h2>
+          <ul class="summary" id="run-summary"></ul>
+        </div>
         <p class="note">A <em>deliverable candidate</em> is evidence, not proof, and <em>unknown</em> is never treated as valid. <code>send_eligible</code> is a filter, not consent to send, and there is no zero-bounce guarantee.</p>
         <div class="card">
           <div class="toolbar">
             <div class="chips" id="chips" role="group" aria-label="Filter by status"></div>
-            <input id="search" type="search" placeholder="Search email or reason" aria-label="Search results">
+            <input id="search" type="search" placeholder="Search email, lead or reason" aria-label="Search results">
             <span class="grow"></span>
+            <button class="btn" id="recheck-unknown" type="button">Re-check unknowns</button>
             <button class="btn" id="dl-all" type="button">Download all</button>
             <button class="btn" id="dl-send" type="button">Download send-eligible</button>
           </div>
+          <p class="filter-note" id="filter-note" hidden></p>
           <div class="scroll">
             <table id="table">
-              <thead><tr><th>Email</th><th>Status</th><th>Reason</th><th>Flags</th><th>Send</th></tr></thead>
+              <thead><tr id="head-row"></tr></thead>
               <tbody id="rows"></tbody>
             </table>
           </div>
@@ -120,7 +140,7 @@
         <div class="toolbar"><h2>Recent jobs</h2><span class="grow"></span><button class="btn small" id="refresh-jobs" type="button">Refresh</button></div>
         <div class="scroll">
           <table>
-            <thead><tr><th>Started</th><th>Source</th><th>Status</th><th>Total</th><th>Summary</th><th></th></tr></thead>
+            <thead><tr><th scope="col">Started</th><th scope="col">Source</th><th scope="col">Checks</th><th scope="col">Status</th><th scope="col">Total</th><th scope="col">Summary</th><th scope="col"><span class="sr">Actions</span></th></tr></thead>
             <tbody id="job-rows"></tbody>
           </table>
         </div>
@@ -137,11 +157,11 @@
       </div>
       <div class="card">
         <h2>Routes</h2>
-        <div class="scroll"><table><thead><tr><th>Route</th><th>Purpose</th></tr></thead><tbody id="route-rows"></tbody></table></div>
+        <div class="scroll"><table><thead><tr><th scope="col">Route</th><th scope="col">Purpose</th></tr></thead><tbody id="route-rows"></tbody></table></div>
       </div>
     </section>
   </main>
 
-  <footer>List Sweep by Digital Patron. Never sends email. Results describe what a check observed, not a guarantee.</footer>
+  <footer>ListSweep by DigitalPatron. Never sends email. Results describe what a check observed, not a guarantee.</footer>
 </body>
 </html>

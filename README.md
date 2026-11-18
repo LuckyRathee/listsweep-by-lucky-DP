@@ -1,8 +1,8 @@
-<p align="left"><img src="verifier/ui/digital-patron-logo.png" alt="Digital Patron" height="56"></p>
+<p align="left"><img src="verifier/ui/digital-patron-logo.png" alt="DigitalPatron" height="56"></p>
 
-# List Sweep
+# ListSweep
 
-**by [Digital Patron](https://digitalpatron.in/)**
+**by [DigitalPatron](https://digitalpatron.in/)**
 
 **Conservative bulk email verification that tells you what it doesn't know.**
 
@@ -43,15 +43,21 @@ Most verifiers hand you a green tick and hope. This one doesn't. It sorts every 
 
 ## Web interface
 
-Open `http://127.0.0.1:8080/` and enter your API key. From the page you can:
+Open `http://127.0.0.1:8080/` (enter your API key if the server needs one). The page offers:
 
-- **Check one address** from the box at the top: type it, press Verify, and see the verdict, the reason, the domain's mail servers, and whether it's a role address.
-- **Upload** a `.csv` or `.xlsx` file, or paste a link to a **Google Sheet** shared as "Anyone with the link can view".
-- Choose what to check: syntax (always), **domain mail records (DNS)**, and live SMTP checks if the server allows them.
-- Watch progress, then filter and search the results, and download everything or only the send-eligible rows.
-- Reopen earlier jobs from the **Jobs** tab, and copy ready-made `curl` and Python examples from the **API** tab.
+- **Check one address** from the box at the top. Press Verify to see the verdict, a one-line reason, the domain's mail servers, and an honest account of what happened at each step (for example "Refused by the recipient's server" when a mail server blocks the check).
+- **Check a whole list**: upload a `.csv` or `.xlsx` file, or paste a link to a Google Sheet shared as "Anyone with the link can view".
+- **One "how thorough" control** in both places: syntax only, plus domain records (DNS), or plus a mailbox check (SMTP). It starts on the most thorough check the server allows.
+- **Live progress with Cancel.** Addresses already checked are kept.
+- **A plain-language summary of each run** ("4 not checked: the recipient's mail server refused this network...") with a "Show" link that filters the table to those rows.
+- **A sortable, searchable results table** that includes your own columns (name, company, and so on). Click a row for the full explanation, server reply code and mail server.
+- **Re-check unknowns** (or all addresses) as a new job, and download all results or only send-eligible rows. Downloads are named after your file.
+- **Jobs tab** with history, what each job checked, a download per job, and a tag on jobs run by an older version of the checker.
+- **API tab** with copy-ready `curl` and Python examples.
 
-The page itself carries no data and is the only thing served without a key. The key is held in the browser tab's session storage, sent only as a header, and never put in a URL. Results are rendered as plain text and the page runs under a strict Content-Security-Policy with no external assets.
+The URL records where you are (`#/jobs`, `#/api`, `#/job/<id>`), so refresh and Back keep your place.
+
+The page itself carries no data and is the only thing served without a key. The key is held in the browser tab's session storage, sent only as a header, and never put in a URL; "Forget key" clears it. Results are rendered as plain text, and the page runs under a strict Content-Security-Policy with no external assets.
 
 ## Quick start
 
@@ -98,7 +104,9 @@ Authenticate with `X-API-Key: <key>` **or** `Authorization: Bearer <key>`.
 | `POST /v1/verify/xlsx` | Same, for an Excel `.xlsx` file |
 | `POST /v1/verify/sheet` | JSON `{"url": "...", "check_dns": true}` for a publicly shared Google Sheet |
 | `GET /v1/jobs` | Recent jobs, newest first |
-| `GET /v1/jobs/{id}` | Status, progress and counts |
+| `GET /v1/jobs/{id}` | Status, progress, counts and a count per reason |
+| `POST /v1/jobs/{id}/cancel` | Stop a queued or running job; finished rows are kept |
+| `POST /v1/jobs/{id}/recheck` | JSON `{"scope": "unknown"}` or `"all"`; start a new job from a finished one |
 | `GET /v1/jobs/{id}/results` | Results as JSON (`send_only`, `offset`, `limit`) |
 | `GET /v1/jobs/{id}/results.csv` | Results as CSV (`send_only`) |
 

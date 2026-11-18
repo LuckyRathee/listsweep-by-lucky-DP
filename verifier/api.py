@@ -3,9 +3,11 @@
 Bind it to loopback or a private network and reach it over an SSH tunnel. It never sends
 mail; SMTP probing stays off unless VERIFIER_SMTP_ENABLED=true and a sender identity is set.
 """
+import asyncio
 import hashlib
 import hmac
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .csv_input import MAX_EMAILS, export_all_csv, export_send_csv
-from .job_service import JobService
+from .job_service import RESULT_VERSION, JobService
 from .sheets_input import fetch_sheet_csv
 from .xlsx_input import MAX_XLSX_BYTES, xlsx_to_csv
 
@@ -38,6 +40,10 @@ class EmailRequest(BaseModel):
     email: str = Field(max_length=320)
     allow_smtp: bool | None = None  # None: use SMTP whenever the server has it enabled
     check_dns: bool = False
+
+
+class RecheckRequest(BaseModel):
+    scope: str = 'unknown'
 
 
 class SheetRequest(BaseModel):
@@ -112,7 +118,7 @@ def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, 
         finally:
             await service.close()
 
-    application = FastAPI(title='List Sweep by Digital Patron', version='0.1.0', lifespan=lifespan)
+    application = FastAPI(title='ListSweep by DigitalPatron', version='0.1.0', lifespan=lifespan)
     application.state.service = service
     application.state.store = service.store
     application.state.verifier = service.verifier
@@ -202,6 +208,7 @@ def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, 
         return {
             'smtp_available': service.smtp_enabled,
             'smtp_default': service.smtp_enabled,
+            'engine': RESULT_VERSION,
             'dns_check_available': True,
             'max_emails': MAX_EMAILS,
             'max_csv_bytes': MAX_UPLOAD_BYTES,
@@ -237,10 +244,34 @@ def create_app(store_path=None, verifier=None, api_key=None, smtp_enabled=None, 
 
     @application.get('/v1/jobs/{job_id}/results.csv')
     async def results_csv(job_id: str, send_only: bool = False):
-        job_or_404(job_id)
+        job = job_or_404(job_id)
         rows = [r for r in service.store.results(job_id) if r['send_eligible'] or not send_only]
         text = export_send_csv(rows) if send_only else export_all_csv(rows)
-        return PlainTextResponse(text, media_type='text/csv')
+        stem = re.sub(r'[^A-Za-z0-9._-]+', '-', Path(job['options'].get('filename') or 'results').stem)
+        name = f"{stem.strip('-')[:60] or 'results'}-{'send-eligible' if send_only else 'all'}.csv"
+        return PlainTextResponse(text, media_type='text/csv',
+                                 headers={'Content-Disposition': f'attachment; filename="{name}"'})
+
+    @application.post('/v1/jobs/{job_id}/cancel')
+    async def cancel_job(job_id: str):
+        job_or_404(job_id)
+        try:
+            service.cancel(job_id)
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+        await asyncio.sleep(0)  # let a cancelled task record its status
+        return {**service.get_job(job_id), 'job_id': job_id}
+
+    @application.post('/v1/jobs/{job_id}/recheck', status_code=202)
+    async def recheck_job(job_id: str, body: RecheckRequest | None = None):
+        job_or_404(job_id)
+        try:
+            new_id = service.recheck(job_id, (body.scope if body else 'unknown'))
+        except PermissionError as error:
+            raise HTTPException(403, str(error)) from error
+        except ValueError as error:
+            raise HTTPException(409 if 'Wait' in str(error) else 422, str(error)) from error
+        return {**service.get_job(new_id), 'job_id': new_id}
 
     @application.get('/', include_in_schema=False)
     async def index():

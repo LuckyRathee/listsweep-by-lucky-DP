@@ -1,9 +1,9 @@
 """DNS resolution with consistent conservative outcomes."""
 from dataclasses import dataclass
 
+import dns.asyncresolver
 import dns.exception
 import dns.resolver
-import dns.asyncresolver
 
 
 @dataclass(frozen=True)

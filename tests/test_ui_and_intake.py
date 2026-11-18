@@ -62,11 +62,12 @@ def xlsx_bytes(rows):
 async def test_page_shell_is_public_but_data_routes_need_the_key(tmp_path):
     async with client_for(make_app(tmp_path)) as client:
         page = await client.get('/')
-        assert page.status_code == 200 and 'List Sweep' in page.text and 'Digital Patron' in page.text
+        assert page.status_code == 200 and 'ListSweep' in page.text and 'DigitalPatron' in page.text
         assert (await client.get('/ui/app.js')).status_code == 200
         assert (await client.get('/ui/style.css')).status_code == 200
         logo = await client.get('/ui/digital-patron-logo.png')
         assert logo.status_code == 200 and logo.content.startswith(b'\x89PNG')
+        assert (await client.get('/ui/digital-patron-icon.png')).status_code == 200
         for path in ('/v1/config', '/v1/jobs', '/v1/jobs/x'):
             assert (await client.get(path)).status_code == 401
         assert (await client.get('/docs')).status_code == 401  # API docs are not public
@@ -289,3 +290,14 @@ async def test_home_screen_has_the_single_address_form(tmp_path):
         html = (await client.get('/')).text
         for marker in ('id="single-form"', 'id="single-email"', 'id="single-result"', 'Check an email address'):
             assert marker in html
+
+
+async def test_interface_has_the_depth_control_cancel_and_accessible_tabs(tmp_path):
+    async with client_for(make_app(tmp_path)) as client:
+        html = (await client.get('/')).text
+        for marker in ('id="single-depth"', 'id="bulk-depth"', 'role="radiogroup"', 'id="cancel-job"',
+                       'id="recheck-unknown"', 'id="run-summary"', 'id="forget-key"', 'role="tablist"'):
+            assert marker in html
+        assert 'type="checkbox"' not in html  # replaced by one depth selector
+        assert html.count('role="tab"') == 3 and 'tabindex="-1"' in html
+        assert 'ListSweep' in html and 'by DigitalPatron' in html
