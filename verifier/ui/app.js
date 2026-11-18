@@ -93,6 +93,12 @@ const state = {
 };
 
 /* ---------- helpers ---------- */
+let busyCount = 0;
+function setBusy(on) {
+  busyCount = Math.max(0, busyCount + (on ? 1 : -1));
+  document.body.classList.toggle('busy', busyCount > 0);   // drives the sweep line
+}
+
 function el(tag, props = {}, children = []) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(props)) {
@@ -216,19 +222,18 @@ function buildDepth(container, hint) {
 }
 
 function refreshDepths() {
+  const container = $('depth');
   const mailboxOk = Boolean(state.config && state.config.smtp_available);
-  for (const [container, hint] of [[$('single-depth'), $('single-hint')], [$('bulk-depth'), $('bulk-hint')]]) {
-    const mailbox = container.querySelector('[data-depth=mailbox]');
-    mailbox.disabled = !mailboxOk;
-    mailbox.title = mailboxOk ? '' : 'Mailbox checks are switched off on this server';
-    const current = container.dataset.value;
-    // Until the user picks one, default to the most thorough check this server offers.
-    if (!container.dataset.touched || (current === 'mailbox' && !mailboxOk)) {
-      container.choose(mailboxOk ? 'mailbox' : 'domain');
-    }
-    if (!mailboxOk) {
-      hint.textContent = `${DEPTHS.find((d) => d[0] === container.dataset.value)[2]} Mailbox checks are switched off on this server.`;
-    }
+  const mailbox = container.querySelector('[data-depth=mailbox]');
+  mailbox.disabled = !mailboxOk;
+  mailbox.title = mailboxOk ? '' : 'Mailbox checks are switched off on this server';
+  const current = container.dataset.value;
+  // Until the user picks one, default to the most thorough check this server offers.
+  if (!container.dataset.touched || (current === 'mailbox' && !mailboxOk)) {
+    container.choose(mailboxOk ? 'mailbox' : 'domain');
+  }
+  if (!mailboxOk) {
+    $('depth-hint').textContent = `${DEPTHS.find((d) => d[0] === container.dataset.value)[2]} Mailbox checks are switched off on this server.`;
   }
 }
 const depthOptions = (container) => {
@@ -237,8 +242,12 @@ const depthOptions = (container) => {
 };
 
 /* ---------- single address ---------- */
-function refreshSingle() { $('single-go').disabled = !state.config || !$('single-email').value.trim(); }
+function refreshSingle() { /* buttons stay enabled; verifyOne explains what is missing */ }
 function fact(label, value) { return [el('dt', { text: label }), el('dd', { text: value })]; }
+
+function step(label, tone, detail) {
+  return el('li', { class: tone }, [el('b', { text: label }), el('span', { text: detail })]);
+}
 
 function renderSingle(r) {
   const [headline, caveat] = VERDICT[r.status] || [r.status, ''];
@@ -246,23 +255,34 @@ function renderSingle(r) {
   $('sr-badge').textContent = headline;
   $('sr-text').textContent = `${REASONS[r.reason] || r.reason}.`;
   $('sr-caveat').textContent = caveat;
-  const yesNo = (value) => (value ? 'Yes' : 'No');
-  const mailbox = r.smtp_outcome === 'answered'
-    ? (r.smtp_code ? `Checked (the server replied ${r.smtp_code})` : 'Checked')
-    : (SMTP_OUTCOME[r.smtp_outcome] || 'Not checked');
-  const dns = r.dns_checked
-    ? (r.mx_hosts.length ? `Checked: ${r.mx_hosts.slice(0, 3).join(', ')}` : 'Checked')
-    : (r.syntax_valid ? 'Not checked' : 'Not reached');
+
+  const cannotReceive = ['null_mx', 'domain_not_found', 'no_mail_host'].includes(r.reason);
+  const dnsFailed = ['dns_timeout', 'dns_no_nameservers', 'dns_failure'].includes(r.reason);
+  let domain;
+  if (!r.syntax_valid) domain = step('Domain', '', 'Not reached');
+  else if (!r.dns_checked) domain = step('Domain', '', 'Not checked');
+  else if (cannotReceive) domain = step('Domain', 'bad', 'Cannot receive mail');
+  else if (dnsFailed) domain = step('Domain', 'warn', 'Lookup failed');
+  else domain = step('Domain', 'done', 'Mail servers found');
+
+  let mailbox;
+  if (r.smtp_outcome === 'answered') {
+    mailbox = r.status === 'deliverable_candidate' ? step('Mailbox', 'done', 'Accepted')
+      : r.status === 'undeliverable' ? step('Mailbox', 'bad', 'Rejected') : step('Mailbox', 'warn', 'Unclear answer');
+  } else if (r.smtp_outcome === 'refused') mailbox = step('Mailbox', 'warn', 'Refused by the server');
+  else if (r.smtp_outcome === 'unreachable') mailbox = step('Mailbox', 'warn', 'Could not connect');
+  else if (r.smtp_outcome === 'skipped') mailbox = step('Mailbox', '', 'Not reached');
+  else mailbox = step('Mailbox', '', 'Not run');
+  $('sr-steps').replaceChildren(
+    step('Syntax', r.syntax_valid ? 'done' : 'bad', r.syntax_valid ? 'Valid' : 'Not valid'), domain, mailbox);
+
+  const flags = [r.role_based && 'Role address', r.disposable && 'Disposable domain', r.catch_all && 'Catch-all domain'].filter(Boolean);
   $('sr-facts').replaceChildren(
     ...fact('Address', r.email),
-    ...fact('Syntax', r.syntax_valid ? 'Valid' : 'Not a valid email address'),
-    ...(r.domain ? fact('Domain', r.domain) : []),
-    ...fact('Mail records (DNS)', dns),
-    ...fact('Mailbox (SMTP)', mailbox),
-    ...fact('Role address', yesNo(r.role_based)),
-    ...fact('Disposable domain', yesNo(r.disposable)),
-    ...fact('Catch-all domain', yesNo(r.catch_all)),
-    ...fact('Send-eligible', yesNo(r.send_eligible)),
+    ...(r.mx_hosts && r.mx_hosts.length ? fact('Mail servers', r.mx_hosts.slice(0, 3).join(', ')) : []),
+    ...(r.smtp_outcome === 'answered' && r.smtp_code ? fact('Server reply', String(r.smtp_code)) : []),
+    ...(flags.length ? fact('Flags', flags.join(', ')) : []),
+    ...fact('Send-eligible', r.send_eligible ? 'Yes' : 'No'),
   );
   $('single-result').hidden = false;
 }
@@ -270,18 +290,21 @@ function renderSingle(r) {
 async function verifyOne(event) {
   event.preventDefault();
   const email = $('single-email').value.trim();
-  if (!email) return;
+  if (!email) { notice('Enter an email address to check.', 'info'); $('single-email').focus(); return; }
+  if (!state.config) { notice('Not connected to the server yet. Check the connection in the sidebar.'); return; }
   notice('');
   $('single-result').hidden = true;   // never show a previous address's result for a new check
   $('single-go').disabled = true;
   $('single-go').textContent = 'Checking…';
+  setBusy(true);
   try {
-    renderSingle(await postJson('/v1/verify/email', { email, ...depthOptions($('single-depth')) }));
+    renderSingle(await postJson('/v1/verify/email', { email, ...depthOptions($('depth')) }));
   } catch (error) {
     notice(error.message);
   } finally {
+    setBusy(false);
+    $('single-go').disabled = false;
     $('single-go').textContent = 'Verify';
-    refreshSingle();
   }
 }
 
@@ -314,6 +337,7 @@ const quietHash = (hash) => history.replaceState(null, '', hash);
 
 async function openJob(jobId) {
   clearTimeout(state.pollTimer);
+  stopWatching();
   try {
     const job = await getJson(`/v1/jobs/${encodeURIComponent(jobId)}`);
     state.jobId = jobId;
@@ -341,7 +365,7 @@ function setSource(source) {
   refreshStart();
 }
 const startReady = () => (state.source === 'file' ? Boolean(state.file) : $('sheet-url').value.trim().length > 0);
-function refreshStart() { $('start').disabled = !state.config || !startReady(); }
+function refreshStart() { /* buttons stay enabled; startJob explains what is missing */ }
 
 function chooseFile(file) {
   if (!file) return;
@@ -360,6 +384,7 @@ function chooseFile(file) {
 
 /* ---------- jobs: start, watch, cancel, re-check ---------- */
 function beginWatching(job) {
+  stopWatching();
   state.jobId = job.job_id;
   state.job = null;
   quietHash(`#/job/${job.job_id}`);
@@ -368,9 +393,12 @@ function beginWatching(job) {
 }
 
 async function startJob() {
+  if (state.source === 'file' && !state.file) { notice('Choose a CSV or Excel file first.', 'info'); return; }
+  if (state.source === 'sheet' && !$('sheet-url').value.trim()) { notice('Paste a Google Sheets link first.', 'info'); $('sheet-url').focus(); return; }
+  if (!state.config) { notice('Not connected to the server yet. Check the connection in the sidebar.'); return; }
   notice('');
   $('start').disabled = true;
-  const options = depthOptions($('bulk-depth'));
+  const options = depthOptions($('depth'));
   const concurrency = Math.max(1, Math.min(25, parseInt($('opt-conc').value, 10) || 4));
   try {
     let job;
@@ -389,12 +417,13 @@ async function startJob() {
   } catch (error) {
     notice(error.message);
   } finally {
-    refreshStart();
+    $('start').disabled = false;
   }
 }
 
 function watchJob(jobId, delay = 1000, failures = 0) {
   clearTimeout(state.pollTimer);
+  if (!state.watching) { state.watching = true; setBusy(true); }
   $('progress-card').hidden = false;
   $('cancel-job').disabled = false;
   const tick = async () => {
@@ -407,6 +436,7 @@ function watchJob(jobId, delay = 1000, failures = 0) {
       $('progress').value = job.processed;
       $('progress-text').textContent = `${job.processed} of ${job.total} checked`;
       if (['completed', 'failed', 'cancelled'].includes(job.status)) {
+        stopWatching();
         $('progress-card').hidden = true;
         if (job.status === 'failed') notice(`Job failed: ${job.error || 'unknown error'}`);
         await showResults(job);
@@ -420,11 +450,16 @@ function watchJob(jobId, delay = 1000, failures = 0) {
         notice('Connection problem, retrying…', 'info');
         watchJob(jobId, 3000, failures + 1);
       } else {
+        stopWatching();
         notice(`${error.message}. Open the job again from the Jobs tab to resume watching it.`);
       }
     }
   };
   state.pollTimer = setTimeout(tick, delay);
+}
+
+function stopWatching() {
+  if (state.watching) { state.watching = false; setBusy(false); }
 }
 
 async function cancelCurrent(jobId = state.jobId) {
@@ -448,7 +483,7 @@ async function recheck(scope) {
   try {
     // Uses the "How thorough" setting above, so a shallow job can be re-checked more deeply.
     beginWatching(await postJson(`/v1/jobs/${encodeURIComponent(state.jobId)}/recheck`,
-      { scope, ...depthOptions($('bulk-depth')) }));
+      { scope, ...depthOptions($('depth')) }));
   } catch (error) {
     notice(error.message);
   }
@@ -467,7 +502,6 @@ function captureFocus() {
   return () => { if (selector) { const node = document.querySelector(selector); if (node) node.focus({ preventScroll: true }); } };
 }
 
-const tile = (value, label) => el('div', { class: 'tile' }, [el('b', { text: String(value) }), el('span', { text: label })]);
 const shortReason = (r) => SHORT[r.reason] || r.reason;
 
 async function showResults(job) {
@@ -487,7 +521,7 @@ async function showResults(job) {
   $('search').value = '';
   $('progress-card').hidden = true;
   $('results').hidden = false;
-  renderTiles();
+  renderHeadline();
   renderStale();
   renderSummary();
   renderChips();
@@ -500,14 +534,29 @@ async function showResults(job) {
 
 function count(status) { return state.rows.filter((r) => r.status === status).length; }
 
-function renderTiles() {
-  $('tiles').replaceChildren(
-    tile(state.rows.length, 'Addresses'),
-    tile(count('deliverable_candidate'), 'Candidates'),
-    tile(count('unknown'), 'Unknown'),
-    tile(count('undeliverable'), 'Undeliverable'),
-    tile(state.rows.filter((r) => r.send_eligible).length, 'Send-eligible'),
-    tile((state.job && state.job.duplicate_count) || 0, 'Duplicates removed'),
+function renderHeadline() {
+  const total = state.rows.length;
+  const ok = count('deliverable_candidate'), unknown = count('unknown'), bad = count('undeliverable');
+  const eligible = state.rows.filter((r) => r.send_eligible).length;
+  const duplicates = (state.job && state.job.duplicate_count) || 0;
+  const bar = el('div', { class: 'propbar', role: 'img', 'aria-label': `${ok} candidates, ${unknown} unknown, ${bad} undeliverable` });
+  for (const [cls, n] of [['p-ok', ok], ['p-unknown', unknown], ['p-bad', bad]]) {
+    if (!n) continue;
+    const seg = el('i', { class: cls });
+    seg.style.width = `${(n / Math.max(total, 1)) * 100}%`;
+    bar.append(seg);
+  }
+  const legend = el('ul', { class: 'legend' }, [
+    el('li', { class: 'ok' }, [el('b', { text: String(ok) }), ' candidates']),
+    el('li', { class: 'unknown' }, [el('b', { text: String(unknown) }), ' unknown']),
+    el('li', { class: 'bad' }, [el('b', { text: String(bad) }), ' undeliverable']),
+  ]);
+  const extra = [`${eligible} send-eligible`];
+  if (duplicates) extra.push(`${duplicates} duplicate${duplicates === 1 ? '' : 's'} removed`);
+  $('headline').replaceChildren(
+    el('div', { class: 'headline-num' }, [el('b', { text: String(ok) }), el('span', { text: `of ${total} are deliverable candidates` })]),
+    el('div', {}, [bar, legend]),
+    el('p', { class: 'headline-extra', text: extra.join(' · ') }),
   );
 }
 
@@ -561,8 +610,7 @@ function matches(r) {
 
 function sortValue(r, key) {
   if (key === 'email') return r.email.toLowerCase();
-  if (key === 'status') return STATUS_RANK[r.status] ?? 9;
-  if (key === 'reason') return shortReason(r).toLowerCase();
+  if (key === 'status') return (STATUS_RANK[r.status] ?? 9) * 1000 + shortReason(r).toLowerCase().charCodeAt(0);
   if (key === 'send') return r.send_eligible ? 0 : 1;
   if (key.startsWith('lead:')) return String((r.metadata || {})[key.slice(5)] || '').toLowerCase();
   return 0;
@@ -570,7 +618,7 @@ function sortValue(r, key) {
 
 function columns() {
   return [{ key: 'email', label: 'Email' }, ...state.leads.map((name) => ({ key: `lead:${name}`, label: name })),
-    { key: 'status', label: 'Status' }, { key: 'reason', label: 'Reason' }, { key: 'send', label: 'Send' }];
+    { key: 'status', label: 'Result' }, { key: 'send', label: 'Send' }];
 }
 
 function renderHead() {
@@ -623,9 +671,11 @@ function renderTable() {
     tr.append(
       el('td', { class: 'email', text: r.email }),
       ...state.leads.map((name) => el('td', { text: (r.metadata || {})[name] || '' })),
-      el('td', {}, el('span', { class: `badge ${r.status}`, text: STATUS_LABEL[r.status] || r.status })),
-      el('td', { text: shortReason(r) }),
-      el('td', { text: r.send_eligible ? 'Yes' : 'No' }),
+      el('td', { class: 'result' }, [
+        el('span', { class: `badge ${r.status}`, text: STATUS_LABEL[r.status] || r.status }),
+        el('span', { class: 'why', text: shortReason(r) }),
+      ]),
+      el('td', { class: r.send_eligible ? 'send yes' : 'send', title: r.send_eligible ? 'Send-eligible' : 'Not send-eligible', 'aria-label': r.send_eligible ? 'Send-eligible' : 'Not send-eligible', text: r.send_eligible ? '\u2713' : '\u2013' }),
     );
     out.push(tr);
     if (open) out.push(detailRow(r, cols.length));
@@ -645,6 +695,7 @@ function renderTable() {
 
 async function download(sendOnly, jobId = state.jobId) {
   if (!jobId) return;
+  $('dl-menu').open = false;
   try {
     const response = await api(`/v1/jobs/${encodeURIComponent(jobId)}/results.csv?send_only=${sendOnly}`);
     const named = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition') || '');
@@ -735,7 +786,8 @@ function initTabs() {
   $('tab-verify').parentElement.addEventListener('keydown', (event) => {
     const at = TABS.findIndex((name) => $(`tab-${name}`) === document.activeElement);
     if (at < 0) return;
-    const next = { ArrowRight: (at + 1) % TABS.length, ArrowLeft: (at + TABS.length - 1) % TABS.length, Home: 0, End: TABS.length - 1 }[event.key];
+    const forward = (at + 1) % TABS.length, back = (at + TABS.length - 1) % TABS.length;
+    const next = { ArrowRight: forward, ArrowDown: forward, ArrowLeft: back, ArrowUp: back, Home: 0, End: TABS.length - 1 }[event.key];
     if (next === undefined) return;
     event.preventDefault();
     $(`tab-${TABS[next]}`).focus();
@@ -745,10 +797,8 @@ function initTabs() {
 
 function init() {
   initTabs();
-  buildDepth($('single-depth'), $('single-hint'));
-  buildDepth($('bulk-depth'), $('bulk-hint'));
-  $('single-depth').choose('domain');
-  $('bulk-depth').choose('domain');
+  buildDepth($('depth'), $('depth-hint'));
+  $('depth').choose('domain');
   $('src-file').addEventListener('click', () => setSource('file'));
   $('src-sheet').addEventListener('click', () => setSource('sheet'));
   $('file').addEventListener('change', (event) => chooseFile(event.target.files[0]));
@@ -760,7 +810,7 @@ function init() {
   $('start').addEventListener('click', startJob);
   $('cancel-job').addEventListener('click', () => cancelCurrent());
   $('single-form').addEventListener('submit', verifyOne);
-  $('single-email').addEventListener('input', () => { $('single-result').hidden = true; refreshSingle(); });
+  $('single-email').addEventListener('input', () => { $('single-result').hidden = true; });
   $('search').addEventListener('input', (event) => { state.query = event.target.value; state.page = 0; renderTable(); });
   $('prev').addEventListener('click', () => { state.page -= 1; renderTable(); });
   $('next').addEventListener('click', () => { state.page += 1; renderTable(); });
@@ -784,6 +834,13 @@ function init() {
     await loadConfig();
   });
   window.addEventListener('hashchange', route);
+  document.addEventListener('click', (event) => { if (!event.target.closest('#dl-menu')) $('dl-menu').open = false; });
+  document.addEventListener('keydown', (event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+    const tab = { 1: 'verify', 2: 'jobs', 3: 'api' }[event.key];
+    if (tab) { event.preventDefault(); go(`#/${tab}`); }
+    else if (event.key.toLowerCase() === 'k') { event.preventDefault(); go('#/verify'); setTimeout(() => $('single-email').focus(), 80); }
+  });
   buildApiTab();
   loadConfig().then(route);
 }

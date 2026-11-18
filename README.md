@@ -43,17 +43,16 @@ Most verifiers hand you a green tick and hope. This one doesn't. It sorts every 
 
 ## Web interface
 
-Open `http://127.0.0.1:8080/` (enter your API key if the server needs one). The page offers:
+Open `http://127.0.0.1:8080/` (enter your API key in the sidebar if the server needs one). It is laid out like a desktop app: a fixed sidebar (Verify, Jobs, API, connection status) and a workspace that scrolls on its own. In a narrow window the sidebar becomes a top bar.
 
-- **Check one address** from the box at the top. Press Verify to see the verdict, a one-line reason, the domain's mail servers, and an honest account of what happened at each step (for example "Refused by the recipient's server" when a mail server blocks the check).
-- **Check a whole list**: upload a `.csv` or `.xlsx` file, or paste a link to a Google Sheet shared as "Anyone with the link can view".
-- **One "how thorough" control** in both places: syntax only, plus domain records (DNS), or plus a mailbox check (SMTP). It starts on the most thorough check the server allows.
-- **Live progress with Cancel.** Addresses already checked are kept.
-- **A plain-language summary of each run** ("4 not checked: the recipient's mail server refused this network...") with a "Show" link that filters the table to those rows.
-- **A sortable, searchable results table** that includes your own columns (name, company, and so on). Click a row for the full explanation, server reply code and mail server.
-- **Re-check unknowns** (or all addresses) as a new job, and download all results or only send-eligible rows. Downloads are named after your file.
-- **Jobs tab** with history, what each job checked, a download per job, and a tag on jobs run by an older version of the checker.
-- **API tab** with copy-ready `curl` and Python examples.
+- **One shared "How thorough" setting** at the top: syntax only, plus domain records (DNS), or plus a mailbox check (SMTP). It starts on the most thorough check the server allows and applies to everything below, including re-checks.
+- **One address**: type it and press Verify. You get the verdict, a one-line reason, a three-step strip (Syntax, Domain, Mailbox) showing what really happened at each step ("Refused by the server" when a mail server blocks the check), and only the details worth reading.
+- **A list**: upload a `.csv` or `.xlsx` file, or paste a link to a Google Sheet shared as "Anyone with the link can view". Progress is live and can be cancelled; addresses already checked are kept.
+- **Results**: a headline ("10 of 15 are deliverable candidates") with a proportion bar, a plain-language summary of the run with "Show" filters, and a sortable, searchable table that includes your own columns. Each row shows the result and the reason together plus a quiet send-eligible mark. Click a row for the full explanation.
+- **Re-check unknowns** (or all addresses) as a new job, and download all results or only send-eligible rows from one Download menu. Files are named after your upload.
+- **Jobs** keeps history with what each job checked, a download per job, and a tag on jobs run by an older version of the checker. **API** has copy-ready `curl` and Python examples.
+- **Keyboard**: `Ctrl/Cmd+1`, `+2`, `+3` switch sections, `Ctrl/Cmd+K` jumps to the address box, and arrow keys move through tabs and the thoroughness options.
+- **Look**: black and white with the logo's orange as the one accent. The background is a still dot grid with a very slow light; a thin orange sweep line runs across the window only while a check is in progress.
 
 The URL records where you are (`#/jobs`, `#/api`, `#/job/<id>`), so refresh and Back keep your place.
 
